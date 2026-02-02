@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Health Advisor</title>
+    <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <h1 class="app-title">Health Advisor</h1>
+            <nav class="header-nav">
+                <a href="/debug" target="_blank" class="debug-link">Debug View</a>
+            </nav>
+        </header>
+
+        <!-- Patient Context Bar -->
+        <div class="patient-context" id="patientContext">
+            <div class="patient-selector">
+                <label for="patientSelect">Select Patient:</label>
+                <select id="patientSelect" onchange="handlePatientChange()">
+                    <option value="">Loading patients...</option>
+                </select>
+            </div>
+            <div class="patient-info" id="patientInfo">
+                <span class="patient-name" id="patientName">--</span>
+                <span class="patient-dob" id="patientDob">DOB: --</span>
+                <span class="patient-member-id" id="patientMemberId">Member ID: --</span>
+            </div>
+        </div>
+
+        <!-- Main Chat Area -->
+        <main class="chat-container">
+            <!-- Example Prompts -->
+            <div class="example-prompts" id="examplePrompts">
+                <p class="prompts-header">Try asking:</p>
+                <div class="prompt-buttons">
+                    <button class="prompt-btn" onclick="sendExamplePrompt('What prescriptions do I currently have?')">
+                        What prescriptions do I currently have?
+                    </button>
+                    <button class="prompt-btn" onclick="sendExamplePrompt('When is my next appointment?')">
+                        When is my next appointment?
+                    </button>
+                    <button class="prompt-btn" onclick="sendExamplePrompt('Show me my recent lab results')">
+                        Show me my recent lab results
+                    </button>
+                    <button class="prompt-btn" onclick="sendExamplePrompt('What is my primary care physician\\'s name?')">
+                        What is my primary care physician's name?
+                    </button>
+                    <button class="prompt-btn" onclick="sendExamplePrompt('What medical conditions do I have?')">
+                        What medical conditions do I have?
+                    </button>
+                    <button class="prompt-btn" onclick="sendExamplePrompt('Tell me about my insurance coverage')">
+                        Tell me about my insurance coverage
+                    </button>
+                </div>
+            </div>
+
+            <!-- Chat Messages -->
+            <div class="chat-messages" id="chatMessages">
+                <div class="message system-message">
+                    <p>Welcome to Health Advisor! Select a patient above and ask questions about your health information.</p>
+                </div>
+            </div>
+
+            <!-- Chat Input -->
+            <div class="chat-input-container">
+                <form id="chatForm" onsubmit="handleSubmit(event)">
+                    <input
+                        type="text"
+                        id="chatInput"
+                        placeholder="Ask about your health information..."
+                        autocomplete="off"
+                        disabled
+                    >
+                    <button type="submit" id="sendBtn" disabled>Send</button>
+                </form>
+            </div>
+        </main>
+
+        <!-- Loading Overlay -->
+        <div class="loading-overlay" id="loadingOverlay">
+            <div class="loading-spinner"></div>
+            <p>Processing your request...</p>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

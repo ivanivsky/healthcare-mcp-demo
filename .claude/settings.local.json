@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:modelcontextprotocol.github.io)",
+      "Bash(chmod:*)",
+      "WebFetch(domain:gofastmcp.com)",
+      "WebFetch(domain:pypi.org)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:www.ragie.ai)",
+      "Bash(python:*)",
+      "Bash(python3:*)"
+    ]
+  }
+}

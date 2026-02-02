@@ -1,0 +1,168 @@
+# Health Advisor Setup Guide
+
+This guide walks you through setting up the Health Advisor demo application on your local machine.
+
+## Prerequisites
+
+- **Python 3.12 or 3.13** (Python 3.14 is not yet supported due to pydantic-core compatibility)
+- An Anthropic API key (get one at https://console.anthropic.com)
+
+## Quick Start
+
+### 1. Create and activate a virtual environment
+
+```bash
+# Create virtual environment
+python -m venv venv
+
+# Activate it
+# On macOS/Linux:
+source venv/bin/activate
+
+# On Windows:
+.\venv\Scripts\activate
+```
+
+### 2. Install dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### 3. Set your Anthropic API key
+
+```bash
+# On macOS/Linux:
+export ANTHROPIC_API_KEY="your-api-key-here"
+
+# On Windows (PowerShell):
+$env:ANTHROPIC_API_KEY="your-api-key-here"
+
+# On Windows (Command Prompt):
+set ANTHROPIC_API_KEY=your-api-key-here
+```
+
+### 4. Initialize the database with sample data
+
+```bash
+python scripts/seed_database.py
+```
+
+This creates `data/health_advisor.db` with 5 fake patients and their health records.
+
+### 5. Start the MCP Server (Terminal 1)
+
+```bash
+python mcp_server/server.py
+```
+
+The MCP server will start on port 8001 with endpoints:
+- SSE connection: `http://localhost:8001/sse`
+- Messages: `http://localhost:8001/messages/`
+- Health check: `http://localhost:8001/health`
+
+### 6. Start the Backend API (Terminal 2)
+
+```bash
+python -m backend.main
+```
+
+The backend API will start on port 8080.
+
+### 7. Open the application
+
+Open your browser and navigate to: **http://localhost:8080**
+
+## Architecture Overview
+
+```
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│    Frontend     │────▶│  FastAPI Backend │────▶│   MCP Server    │
+│  (Port 8080)    │     │   (Port 8080)   │     │   (Port 8001)   │
+│                 │     │                 │     │                 │
+│  - Chat UI      │     │  - MCP Client   │     │  - PHI Tools    │
+│  - Debug View   │     │  - Claude Agent │     │  - SQLite DB    │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+```
+
+## Configuration
+
+All settings are in `config.yaml`:
+
+- **MCP transport**: Change between `stdio`, `sse`, or `streamable-http`
+- **Security controls**: Toggle authentication, validation, etc.
+- **Logging**: Adjust verbosity and debug panel settings
+
+## Ports Used
+
+| Component   | Port | Endpoints                                |
+|------------|------|------------------------------------------|
+| Backend    | 8080 | `/` (UI), `/api/*`, `/debug`             |
+| MCP Server | 8001 | `/sse`, `/messages/`, `/health`          |
+
+## Test Patients
+
+The database is seeded with 5 patients for different test scenarios:
+
+1. **Margaret Chen** - Complex case with multiple chronic conditions
+2. **James Wilson** - Healthy baseline with minimal history
+3. **Sofia Rodriguez** - Active cancer treatment
+4. **Robert Thompson** - Insurance issues, gaps in care
+5. **Emily Nakamura** - Sensitive diagnoses (for privacy testing)
+
+## Troubleshooting
+
+### Python 3.14 errors / pydantic-core build failures
+
+Python 3.14 is too new - `pydantic-core` doesn't have pre-built wheels for it yet. Use Python 3.12 or 3.13 instead:
+
+```bash
+# Check your Python version
+python --version
+
+# If using pyenv, switch to 3.12 or 3.13
+pyenv install 3.12
+pyenv local 3.12
+```
+
+### Dependency version conflicts during pip install
+
+If you see errors about incompatible versions of `pydantic` or `pydantic-settings`, the `requirements.txt` has been updated to fix these. Make sure you have the latest version of the file and try again:
+
+```bash
+pip install -r requirements.txt
+```
+
+The MCP SDK 1.2.0 requires `pydantic>=2.10.1` and `pydantic-settings>=2.6.1`.
+
+### "MCP server not connected"
+
+Make sure the MCP server is running in a separate terminal before starting the backend.
+
+### "ANTHROPIC_API_KEY not set"
+
+Ensure the environment variable is set in the same terminal where you run the backend.
+
+### Database errors
+
+Delete `data/health_advisor.db` and re-run the seed script:
+
+```bash
+rm data/health_advisor.db
+python scripts/seed_database.py
+```
+
+## Debug View
+
+Access the debug panel at: **http://localhost:8080/debug**
+
+This shows:
+- MCP tool calls (requests/responses)
+- Claude API interactions
+- Agent reasoning flow
+- Current configuration
+
+## Stopping the Application
+
+1. Press `Ctrl+C` in each terminal to stop the servers
+2. Deactivate the virtual environment: `deactivate`

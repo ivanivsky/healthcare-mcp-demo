@@ -1,0 +1,56 @@
+# Health Advisor Configuration
+# Toggle security controls and observability settings here
+
+app:
+  name: "Health Advisor"
+  environment: "development"
+
+# MCP Server Configuration
+mcp:
+  transport: "sse"  # Options: stdio, sse, http
+  host: "localhost"
+  port: 8001
+
+# Backend API Configuration
+backend:
+  host: "localhost"
+  port: 8080
+  cors_enabled: true  # Enable for local development
+
+# Frontend Configuration
+frontend:
+  host: "localhost"
+  port: 8000
+
+# Claude API Configuration
+# Note: Set ANTHROPIC_API_KEY environment variable before running
+claude:
+  model: "claude-sonnet-4-20250514"
+  max_tokens: 4096
+
+# Database Configuration
+database:
+  path: "data/health_advisor.db"
+
+# Security Controls (toggle for vulnerability demonstrations)
+security:
+  authentication:
+    enabled: false  # Will implement in security phase
+  input_validation:
+    level: "basic"  # Options: none, basic, strict
+  mcp_auth_required: false  # Require auth for MCP server
+  prompt_injection_protection: true
+  data_filtering: true  # Filter sensitive data in responses
+  rate_limiting:
+    enabled: false
+    requests_per_minute: 60
+
+# Logging & Observability
+logging:
+  level: "DEBUG"  # Options: DEBUG, INFO, WARNING, ERROR
+  debug_panel_enabled: true  # Enable /debug endpoint
+  log_mcp_messages: true
+  log_claude_requests: true
+  log_sql_queries: true
+  log_to_file: true
+  log_file_path: "logs/health_advisor.log"

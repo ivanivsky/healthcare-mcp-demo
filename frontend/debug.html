@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Debug View - Health Advisor</title>
+    <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body>
+    <div class="debug-container">
+        <!-- Header -->
+        <header class="debug-header">
+            <h1>Health Advisor - Debug View</h1>
+            <div class="debug-controls">
+                <div class="auto-refresh">
+                    <span class="auto-refresh-dot"></span>
+                    <span>Auto-refresh</span>
+                </div>
+                <select id="eventFilter" onchange="filterEvents()">
+                    <option value="">All Events</option>
+                    <option value="mcp">MCP Messages</option>
+                    <option value="claude">Claude API</option>
+                    <option value="sql">SQL Queries</option>
+                    <option value="agent">Agent Reasoning</option>
+                    <option value="error">Errors</option>
+                    <option value="security">Security</option>
+                </select>
+                <button class="secondary" onclick="refreshEvents()">Refresh</button>
+                <button class="secondary" onclick="clearEvents()">Clear</button>
+                <a href="/" style="text-decoration: none;">
+                    <button>Back to App</button>
+                </a>
+            </div>
+        </header>
+
+        <!-- Config Panel -->
+        <div class="config-panel">
+            <h3>Current Configuration</h3>
+            <div class="config-grid" id="configGrid">
+                <div class="config-item">
+                    <span class="config-label">Loading...</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Events List -->
+        <div class="events-container" id="eventsContainer">
+            <div class="no-events" id="noEvents">
+                <p>No debug events yet. Interact with the chat to see events here.</p>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/debug.js"></script>
+</body>
+</html>
