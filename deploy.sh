@@ -24,8 +24,8 @@ echo ""
 
 # Function to deploy MCP server
 deploy_mcp() {
-    echo ">>> Building MCP server image..."
-    docker build -t ${MCP_IMAGE} -f Dockerfile.mcp-server .
+    echo ">>> Building MCP server image (linux/amd64 for Cloud Run)..."
+    docker build --platform linux/amd64 -t ${MCP_IMAGE} -f Dockerfile.mcp-server .
 
     echo ">>> Pushing MCP server image to Artifact Registry..."
     docker push ${MCP_IMAGE}
@@ -77,8 +77,8 @@ deploy_backend() {
         MCP_SERVER_URL="${MCP_URL}/sse"
     fi
 
-    echo ">>> Building backend image..."
-    docker build -t ${BACKEND_IMAGE} -f Dockerfile.backend .
+    echo ">>> Building backend image (linux/amd64 for Cloud Run)..."
+    docker build --platform linux/amd64 -t ${BACKEND_IMAGE} -f Dockerfile.backend .
 
     echo ">>> Pushing backend image to Artifact Registry..."
     docker push ${BACKEND_IMAGE}
