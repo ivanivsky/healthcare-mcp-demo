@@ -296,8 +296,9 @@ async def serve_debug():
 if __name__ == "__main__":
     import uvicorn
 
-    host = config.get("backend", {}).get("host", "localhost")
-    port = config.get("backend", {}).get("port", 8080)
+    # Support environment variable overrides for Cloud Run
+    host = os.environ.get("BACKEND_HOST", config.get("backend", {}).get("host", "localhost"))
+    port = int(os.environ.get("BACKEND_PORT", config.get("backend", {}).get("port", 8080)))
 
     uvicorn.run(
         "backend.main:app",

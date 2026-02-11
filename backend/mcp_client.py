@@ -46,6 +46,9 @@ class MCPClient:
 
     @property
     def server_url(self) -> str:
+        # Use MCP_SERVER_URL if provided (for Cloud Run), otherwise construct from host/port
+        if self.mcp_config.get("server_url"):
+            return self.mcp_config["server_url"]
         return f"http://{self.host}:{self.port}/sse"
 
     async def connect(self):

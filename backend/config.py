@@ -1,5 +1,6 @@
 """
 Configuration loader for Health Advisor backend.
+Supports environment variable overrides for Cloud Run deployment.
 """
 
 import os
@@ -10,12 +11,35 @@ import yaml
 
 
 def load_config() -> dict[str, Any]:
-    """Load configuration from config.yaml."""
+    """Load configuration from config.yaml with environment variable overrides."""
     config_path = Path(__file__).parent.parent / "config.yaml"
     if config_path.exists():
         with open(config_path) as f:
-            return yaml.safe_load(f)
-    return {}
+            config = yaml.safe_load(f)
+    else:
+        config = {}
+
+    # Apply environment variable overrides for Cloud Run
+    if "mcp" not in config:
+        config["mcp"] = {}
+    if "backend" not in config:
+        config["backend"] = {}
+
+    # MCP server configuration overrides
+    if os.environ.get("MCP_HOST"):
+        config["mcp"]["host"] = os.environ["MCP_HOST"]
+    if os.environ.get("MCP_PORT"):
+        config["mcp"]["port"] = int(os.environ["MCP_PORT"])
+    if os.environ.get("MCP_SERVER_URL"):
+        config["mcp"]["server_url"] = os.environ["MCP_SERVER_URL"]
+
+    # Backend configuration overrides
+    if os.environ.get("BACKEND_HOST"):
+        config["backend"]["host"] = os.environ["BACKEND_HOST"]
+    if os.environ.get("BACKEND_PORT"):
+        config["backend"]["port"] = int(os.environ["BACKEND_PORT"])
+
+    return config
 
 
 def get_config() -> dict[str, Any]:

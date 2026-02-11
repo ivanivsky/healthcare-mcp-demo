@@ -290,10 +290,10 @@ def run_http_server(host: str, port: int):
 
 def main():
     """Run the MCP server with configured transport."""
-    # Get transport configuration
-    transport = config.get("mcp", {}).get("transport", "stdio")
-    host = config.get("mcp", {}).get("host", "localhost")
-    port = config.get("mcp", {}).get("port", 8001)
+    # Get transport configuration with environment variable overrides
+    transport = os.environ.get("MCP_TRANSPORT", config.get("mcp", {}).get("transport", "stdio"))
+    host = os.environ.get("MCP_HOST", config.get("mcp", {}).get("host", "localhost"))
+    port = int(os.environ.get("MCP_PORT", config.get("mcp", {}).get("port", 8001)))
 
     logger.info(f"Starting MCP server with transport: {transport}")
 

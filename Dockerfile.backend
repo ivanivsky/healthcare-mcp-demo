@@ -1,0 +1,30 @@
+# Backend API Dockerfile
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Install curl for healthchecks
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY backend/ ./backend/
+COPY frontend/ ./frontend/
+COPY config.yaml .
+
+# Create logs directory
+RUN mkdir -p logs
+
+# Environment variables for Cloud Run
+# MCP_SERVER_URL must be set at runtime to point to the MCP server Cloud Run service
+ENV BACKEND_HOST=0.0.0.0
+ENV BACKEND_PORT=8080
+
+# Expose the backend port (Cloud Run uses 8080 by default)
+EXPOSE 8080
+
+# Run the backend server
+CMD ["python", "-m", "backend.main"]
