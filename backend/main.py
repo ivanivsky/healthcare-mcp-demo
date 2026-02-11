@@ -303,5 +303,5 @@ if __name__ == "__main__":
         "backend.main:app",
         host=host,
         port=port,
-        reload=True,
+        reload=False,
     )
