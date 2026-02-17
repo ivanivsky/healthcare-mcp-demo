@@ -1,4 +1,4 @@
-App Name: Health Advisor 
+App Name: My Health Access
 
 I'm building a healthcare demo application to help my team understand agentic AI, MCP (Model Context Protocol), and AI security risks. This is a learning/testing environment where we'll eventually demonstrate vulnerabilities like insecure communications, prompt injections, MCP misconfigurations, and other AI-specific security issues.
 
@@ -54,7 +54,7 @@ We'll document the "correct" way first, then create vulnerable versions later fo
 - Previous learnings: Tried to use Windsurf initially, and it was hallunicating when trying to create APIs. 
 - Architecture goals: Simple, working baseline first, then add complexity
 
-App Title: "Health Advisor" (display prominently in the UI)
+App Title: "My Health Access" (display prominently in the UI)
 
 Patient Context Display:
 Show the logged-in patient's basic info at the top:

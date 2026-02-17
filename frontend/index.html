@@ -3,24 +3,48 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Health Advisor</title>
+    <title>My Health Access</title>
     <link rel="stylesheet" href="/static/css/styles.css">
 </head>
 <body>
     <div class="app-container">
         <!-- Header -->
         <header class="app-header">
-            <h1 class="app-title">Health Advisor</h1>
+            <h1 class="app-title">My Health Access</h1>
             <nav class="header-nav">
+                <span class="user-info" id="userInfo" style="display: none;">
+                    Logged in as: <strong id="currentUser">--</strong>
+                    <button class="logout-btn" onclick="handleLogout()">Logout</button>
+                </span>
                 <a href="/debug" target="_blank" class="debug-link">Debug View</a>
             </nav>
         </header>
 
+        <!-- Login Form -->
+        <div class="login-container" id="loginContainer">
+            <div class="login-card">
+                <h2>Sign In</h2>
+                <p class="login-subtitle">Enter your credentials to access your health information</p>
+                <form id="loginForm" onsubmit="handleLogin(event)">
+                    <div class="form-group">
+                        <label for="username">Username</label>
+                        <input type="text" id="username" name="username" placeholder="alice or bob" required autocomplete="username">
+                    </div>
+                    <div class="form-group">
+                        <label for="password">Password</label>
+                        <input type="password" id="password" name="password" placeholder="Any non-empty password" required autocomplete="current-password">
+                    </div>
+                    <div class="login-error" id="loginError" style="display: none;"></div>
+                    <button type="submit" class="login-btn" id="loginBtn">Sign In</button>
+                </form>
+            </div>
+        </div>
+
         <!-- Patient Context Bar -->
-        <div class="patient-context" id="patientContext">
+        <div class="patient-context" id="patientContext" style="display: none;">
             <div class="patient-selector">
                 <label for="patientSelect">Select Patient:</label>
-                <select id="patientSelect" onchange="handlePatientChange()">
+                <select id="patientSelect" onchange="handlePatientChange()" disabled>
                     <option value="">Loading patients...</option>
                 </select>
             </div>
@@ -32,27 +56,27 @@
         </div>
 
         <!-- Main Chat Area -->
-        <main class="chat-container">
+        <main class="chat-container" id="chatContainer" style="display: none;">
             <!-- Example Prompts -->
             <div class="example-prompts" id="examplePrompts">
                 <p class="prompts-header">Try asking:</p>
                 <div class="prompt-buttons">
-                    <button class="prompt-btn" onclick="sendExamplePrompt('What prescriptions do I currently have?')">
+                    <button class="prompt-btn" onclick="sendExamplePrompt('What prescriptions do I currently have?')" disabled>
                         What prescriptions do I currently have?
                     </button>
-                    <button class="prompt-btn" onclick="sendExamplePrompt('When is my next appointment?')">
+                    <button class="prompt-btn" onclick="sendExamplePrompt('When is my next appointment?')" disabled>
                         When is my next appointment?
                     </button>
-                    <button class="prompt-btn" onclick="sendExamplePrompt('Show me my recent lab results')">
+                    <button class="prompt-btn" onclick="sendExamplePrompt('Show me my recent lab results')" disabled>
                         Show me my recent lab results
                     </button>
-                    <button class="prompt-btn" onclick="sendExamplePrompt('What is my primary care physician\\'s name?')">
+                    <button class="prompt-btn" onclick="sendExamplePrompt('What is my primary care physician\\'s name?')" disabled>
                         What is my primary care physician's name?
                     </button>
-                    <button class="prompt-btn" onclick="sendExamplePrompt('What medical conditions do I have?')">
+                    <button class="prompt-btn" onclick="sendExamplePrompt('What medical conditions do I have?')" disabled>
                         What medical conditions do I have?
                     </button>
-                    <button class="prompt-btn" onclick="sendExamplePrompt('Tell me about my insurance coverage')">
+                    <button class="prompt-btn" onclick="sendExamplePrompt('Tell me about my insurance coverage')" disabled>
                         Tell me about my insurance coverage
                     </button>
                 </div>
@@ -61,7 +85,7 @@
             <!-- Chat Messages -->
             <div class="chat-messages" id="chatMessages">
                 <div class="message system-message">
-                    <p>Welcome to Health Advisor! Select a patient above and ask questions about your health information.</p>
+                    <p>Welcome to My Health Access! Select a patient above and ask questions about your health information.</p>
                 </div>
             </div>
 

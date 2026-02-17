@@ -1,8 +1,8 @@
-# Health Advisor Configuration
+# My Health Access Configuration
 # Toggle security controls and observability settings here
 
 app:
-  name: "Health Advisor"
+  name: "My Health Access"
   environment: "development"
 
 # MCP Server Configuration

@@ -1,12 +1,18 @@
 /**
- * Health Advisor - Main Application JavaScript
+ * My Health Access - Main Application JavaScript
  */
 
 // State
 let currentPatient = null;
 let conversationHistory = [];
+let currentUser = null;
 
 // DOM Elements
+const loginContainer = document.getElementById('loginContainer');
+const patientContext = document.getElementById('patientContext');
+const chatContainer = document.getElementById('chatContainer');
+const userInfo = document.getElementById('userInfo');
+const currentUserDisplay = document.getElementById('currentUser');
 const patientSelect = document.getElementById('patientSelect');
 const patientName = document.getElementById('patientName');
 const patientDob = document.getElementById('patientDob');
@@ -16,22 +22,49 @@ const chatInput = document.getElementById('chatInput');
 const sendBtn = document.getElementById('sendBtn');
 const loadingOverlay = document.getElementById('loadingOverlay');
 const examplePrompts = document.getElementById('examplePrompts');
+const loginError = document.getElementById('loginError');
 
 // API Base URL
 const API_BASE = '';
+
+// Fetch options with credentials for session cookies
+const fetchWithCredentials = (url, options = {}) => {
+    return fetch(url, {
+        ...options,
+        credentials: 'include',
+    });
+};
 
 // ============================================================================
 // Initialization
 // ============================================================================
 
 document.addEventListener('DOMContentLoaded', () => {
-    loadPatients();
-    checkHealth();
+    checkAuthStatus();
 });
+
+async function checkAuthStatus() {
+    try {
+        const response = await fetchWithCredentials(`${API_BASE}/api/auth/me`);
+        const data = await response.json();
+
+        if (data.authenticated) {
+            currentUser = data.sub;
+            showAuthenticatedUI();
+            loadPatients();
+            checkHealth();
+        } else {
+            showLoginUI();
+        }
+    } catch (error) {
+        console.error('Auth check error:', error);
+        showLoginUI();
+    }
+}
 
 async function checkHealth() {
     try {
-        const response = await fetch(`${API_BASE}/api/health`);
+        const response = await fetchWithCredentials(`${API_BASE}/api/health`);
         const data = await response.json();
 
         if (!data.mcp_connected) {
@@ -43,12 +76,98 @@ async function checkHealth() {
 }
 
 // ============================================================================
+// Authentication
+// ============================================================================
+
+function showLoginUI() {
+    loginContainer.style.display = 'flex';
+    patientContext.style.display = 'none';
+    chatContainer.style.display = 'none';
+    userInfo.style.display = 'none';
+}
+
+function showAuthenticatedUI() {
+    loginContainer.style.display = 'none';
+    patientContext.style.display = 'flex';
+    chatContainer.style.display = 'flex';
+    userInfo.style.display = 'flex';
+    currentUserDisplay.textContent = currentUser;
+    patientSelect.disabled = false;
+}
+
+async function handleLogin(event) {
+    event.preventDefault();
+
+    const username = document.getElementById('username').value;
+    const password = document.getElementById('password').value;
+
+    // Hide previous errors
+    loginError.style.display = 'none';
+
+    try {
+        const response = await fetchWithCredentials(`${API_BASE}/api/auth/login`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ username, password }),
+        });
+
+        if (!response.ok) {
+            const data = await response.json();
+            showLoginError(data.message || 'Login failed');
+            return;
+        }
+
+        const data = await response.json();
+        currentUser = data.sub;
+        showAuthenticatedUI();
+        loadPatients();
+        checkHealth();
+
+        // Clear form
+        document.getElementById('username').value = '';
+        document.getElementById('password').value = '';
+    } catch (error) {
+        console.error('Login error:', error);
+        showLoginError('Unable to connect to server');
+    }
+}
+
+async function handleLogout() {
+    try {
+        await fetchWithCredentials(`${API_BASE}/api/auth/logout`, {
+            method: 'POST',
+        });
+    } catch (error) {
+        console.error('Logout error:', error);
+    }
+
+    // Reset state
+    currentUser = null;
+    currentPatient = null;
+    conversationHistory = [];
+
+    // Clear UI
+    clearPatientInfo();
+    clearMessages();
+
+    // Show login
+    showLoginUI();
+}
+
+function showLoginError(message) {
+    loginError.textContent = message;
+    loginError.style.display = 'block';
+}
+
+// ============================================================================
 // Patient Management
 // ============================================================================
 
 async function loadPatients() {
     try {
-        const response = await fetch(`${API_BASE}/api/patients`);
+        const response = await fetchWithCredentials(`${API_BASE}/api/patients`);
 
         if (!response.ok) {
             throw new Error('Failed to load patients');
@@ -81,7 +200,7 @@ async function handlePatientChange() {
     }
 
     try {
-        const response = await fetch(`${API_BASE}/api/patients/${patientId}`);
+        const response = await fetchWithCredentials(`${API_BASE}/api/patients/${patientId}`);
         const data = await response.json();
 
         if (data.patient) {
@@ -162,7 +281,7 @@ async function sendMessage(message) {
     showLoading(true);
 
     try {
-        const response = await fetch(`${API_BASE}/api/chat`, {
+        const response = await fetchWithCredentials(`${API_BASE}/api/chat`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',

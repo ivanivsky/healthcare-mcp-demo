@@ -20,7 +20,9 @@
       "Bash(docker rm:*)",
       "Bash(docker-compose ps:*)",
       "Bash(curl:*)",
-      "Bash(source:*)"
+      "Bash(source:*)",
+      "Bash(grep:*)",
+      "Bash(pip install:*)"
     ]
   }
 }

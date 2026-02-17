@@ -1,6 +1,6 @@
-# Health Advisor Setup Guide
+# My Health Access Setup Guide
 
-This guide walks you through setting up the Health Advisor demo application on your local machine.
+This guide walks you through setting up the My Health Access demo application on your local machine.
 
 ## Prerequisites
 

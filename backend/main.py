@@ -1,11 +1,12 @@
 """
-Health Advisor Backend API
+My Health Access Backend API
 
 FastAPI application that serves as the MCP client and Claude agent orchestrator.
 """
 
 import logging
 import os
+import secrets
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -16,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.middleware.sessions import SessionMiddleware
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -24,7 +26,7 @@ from backend.config import get_config
 from backend.mcp_client import get_mcp_client, shutdown_mcp_client
 from backend.claude_agent import HealthAdvisorAgent
 from backend.debug_logger import get_debug_logger
-from backend.auth import get_auth_context
+from backend.auth import get_auth_context, VALID_USERS
 
 # Load config
 config = get_config()
@@ -58,7 +60,7 @@ async def lifespan(app: FastAPI):
     """Application lifespan - startup and shutdown."""
     global mcp_client, agent
 
-    logger.info("Starting Health Advisor backend...")
+    logger.info("Starting My Health Access backend...")
 
     # Initialize debug logger
     debug_logger = get_debug_logger()
@@ -75,16 +77,31 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown
-    logger.info("Shutting down Health Advisor backend...")
+    logger.info("Shutting down My Health Access backend...")
     await shutdown_mcp_client()
 
 
 # Create FastAPI app
 app = FastAPI(
-    title="Health Advisor API",
-    description="Backend API for Health Advisor healthcare demo",
+    title="My Health Access API",
+    description="Backend API for My Health Access healthcare demo",
     version="1.0.0",
     lifespan=lifespan,
+)
+
+# Session middleware - use SESSION_SECRET from env or generate safe fallback
+session_secret = os.environ.get("SESSION_SECRET")
+if not session_secret:
+    # Generate a persistent secret for local dev (logged warning)
+    session_secret = secrets.token_hex(32)
+    logger.warning("SESSION_SECRET not set; using generated secret (sessions won't persist across restarts)")
+
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=session_secret,
+    session_cookie="mha_session",
+    same_site="lax",
+    https_only=False,  # Set True in production with HTTPS
 )
 
 # CORS middleware
@@ -122,6 +139,75 @@ class PatientInfo(BaseModel):
     member_id: str
 
 
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+# ============================================================================
+# Auth Endpoints
+# ============================================================================
+
+@app.post("/api/auth/login")
+async def login(request: Request, login_request: LoginRequest):
+    """Authenticate user and create session."""
+    username = login_request.username.strip().lower()
+    password = login_request.password.strip()
+
+    # Validate username
+    if username not in VALID_USERS:
+        return JSONResponse(
+            status_code=401,
+            content={"error": "invalid_credentials", "message": "Invalid username or password"}
+        )
+
+    # Validate password is non-empty
+    if not password:
+        return JSONResponse(
+            status_code=401,
+            content={"error": "invalid_credentials", "message": "Password is required"}
+        )
+
+    # Set session
+    request.session["sub"] = username
+    logger.info(f"User '{username}' logged in")
+
+    return {"sub": username}
+
+
+@app.post("/api/auth/logout")
+async def logout(request: Request):
+    """Clear session and log out."""
+    sub = request.session.get("sub")
+    request.session.clear()
+    if sub:
+        logger.info(f"User '{sub}' logged out")
+    return {"ok": True}
+
+
+@app.get("/api/auth/me")
+async def get_current_user(request: Request):
+    """Get current authenticated user info."""
+    sub = request.session.get("sub")
+
+    if not sub:
+        return {"authenticated": False}
+
+    # Get allowed patient IDs from config
+    authz_config = config.get("authz", {})
+    user_patient_map = authz_config.get("user_patient_map", {})
+    allowed_patient_id = user_patient_map.get(sub)
+
+    # Return as list for consistency
+    allowed_patient_ids = [allowed_patient_id] if allowed_patient_id else []
+
+    return {
+        "authenticated": True,
+        "sub": sub,
+        "allowed_patient_ids": allowed_patient_ids,
+    }
+
+
 # ============================================================================
 # API Endpoints
 # ============================================================================
@@ -137,13 +223,16 @@ async def health_check():
 
 
 @app.get("/api/patients", response_model=list[PatientInfo])
-async def list_patients():
+async def list_patients(request: Request):
     """Get list of patients for selector dropdown."""
     if not mcp_client:
         raise HTTPException(status_code=503, detail="MCP server not connected")
 
+    # Extract auth context from request
+    auth = get_auth_context(request)
+
     try:
-        result = await mcp_client.call_tool("list_patients", {})
+        result = await mcp_client.call_tool("list_patients", {}, auth=auth)
         # Parse the result
         content = result.get("content", [])
         if content and content[0].get("type") == "text":
@@ -157,13 +246,16 @@ async def list_patients():
 
 
 @app.get("/api/patients/{patient_id}")
-async def get_patient(patient_id: int):
+async def get_patient(request: Request, patient_id: int):
     """Get patient details."""
     if not mcp_client:
         raise HTTPException(status_code=503, detail="MCP server not connected")
 
+    # Extract auth context from request
+    auth = get_auth_context(request)
+
     try:
-        result = await mcp_client.call_tool("get_patient_demographics", {"patient_id": patient_id})
+        result = await mcp_client.call_tool("get_patient_demographics", {"patient_id": patient_id}, auth=auth)
         content = result.get("content", [])
         if content and content[0].get("type") == "text":
             import json

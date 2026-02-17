@@ -1,4 +1,4 @@
-# Health Advisor Dependencies
+# My Health Access Dependencies
 
 # Web Framework
 fastapi==0.115.0
@@ -24,3 +24,6 @@ httpx-sse==0.4.0
 python-dotenv==1.0.1
 pydantic==2.10.1
 pydantic-settings==2.6.1
+
+# Session support (for Starlette SessionMiddleware)
+itsdangerous==2.2.0

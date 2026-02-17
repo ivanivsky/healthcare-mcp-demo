@@ -1,5 +1,5 @@
 """
-Health Advisor MCP Server
+My Health Access MCP Server
 
 Exposes patient health information (PHI) through MCP tools.
 Supports configurable transports: stdio, sse, streamable-http
@@ -56,7 +56,7 @@ logger = logging.getLogger("mcp_server")
 
 # Create MCP server instance
 mcp = FastMCP(
-    "Health Advisor MCP Server",
+    "My Health Access MCP Server",
     version="1.0.0",
 )
 
@@ -147,17 +147,99 @@ def check_patient_authorization(
 @mcp.tool()
 async def list_patients(auth_context: dict | None = None) -> dict:
     """
-    List all patients in the system.
+    List patients the authenticated user is authorized to access.
     Returns basic info for patient selection dropdown.
     """
-    # No patient-specific authz needed for listing
-    logger.info("Tool called: list_patients")
-    patients = await get_all_patients()
-    logger.debug(f"Found {len(patients)} patients")
-    return {
-        "patients": patients,
-        "count": len(patients)
-    }
+    sub = auth_context.get("sub") if auth_context else None
+    request_id = auth_context.get("request_id") if auth_context else None
+
+    logger.info(f"Tool called: list_patients (sub={sub}, request_id={request_id})")
+
+    # If authz is disabled, return all patients
+    if not is_authz_enabled():
+        patients = await get_all_patients()
+        log_authz_decision(
+            tool="list_patients",
+            patient_id=None,
+            sub=sub,
+            request_id=request_id,
+            decision="allow",
+            reason="authz_disabled",
+        )
+        return {
+            "patients": patients,
+            "count": len(patients)
+        }
+
+    # If no auth context or no sub, return empty list (don't leak patient metadata)
+    if not auth_context or not sub:
+        log_authz_decision(
+            tool="list_patients",
+            patient_id=None,
+            sub=sub,
+            request_id=request_id,
+            decision="deny",
+            reason="missing_auth_context",
+        )
+        return {
+            "patients": [],
+            "count": 0
+        }
+
+    # Get the patient ID this user is authorized to access
+    from mcp_server.policy import get_allowed_patient_id
+    allowed_patient_id = get_allowed_patient_id(sub)
+
+    if allowed_patient_id is None:
+        # User has no patient mapping - return empty list
+        log_authz_decision(
+            tool="list_patients",
+            patient_id=None,
+            sub=sub,
+            request_id=request_id,
+            decision="deny",
+            reason="no_patient_mapping",
+        )
+        return {
+            "patients": [],
+            "count": 0
+        }
+
+    # Fetch only the authorized patient
+    patient = await get_patient_by_id(allowed_patient_id)
+    if patient:
+        # Return only basic info needed for dropdown
+        filtered_patient = {
+            "id": patient["id"],
+            "first_name": patient["first_name"],
+            "last_name": patient["last_name"],
+            "member_id": patient["member_id"],
+        }
+        log_authz_decision(
+            tool="list_patients",
+            patient_id=allowed_patient_id,
+            sub=sub,
+            request_id=request_id,
+            decision="allow",
+        )
+        return {
+            "patients": [filtered_patient],
+            "count": 1
+        }
+    else:
+        # Authorized patient doesn't exist
+        log_authz_decision(
+            tool="list_patients",
+            patient_id=allowed_patient_id,
+            sub=sub,
+            request_id=request_id,
+            decision="allow",
+            reason="patient_not_found",
+        )
+        return {
+            "patients": [],
+            "count": 0
+        }
 
 
 @mcp.tool()
