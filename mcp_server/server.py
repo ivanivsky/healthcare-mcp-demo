@@ -30,6 +30,11 @@ from mcp_server.database import (
     get_patient_insurance,
     get_patient_lab_results,
 )
+from mcp_server.policy import (
+    is_authz_enabled,
+    authorize_patient_access,
+    log_authz_decision,
+)
 
 # Load configuration
 def load_config():
@@ -57,15 +62,95 @@ mcp = FastMCP(
 
 
 # ============================================================================
+# Authorization Helper
+# ============================================================================
+
+def check_patient_authorization(
+    tool_name: str,
+    patient_id: int,
+    auth_context: dict | None,
+) -> dict | None:
+    """
+    Check if the caller is authorized to access a patient's data.
+
+    Args:
+        tool_name: Name of the tool being called
+        patient_id: Patient ID being accessed
+        auth_context: Auth context dict with 'sub' and 'request_id'
+
+    Returns:
+        None if authorized, error dict if denied
+    """
+    # Skip authorization if disabled
+    if not is_authz_enabled():
+        log_authz_decision(
+            tool=tool_name,
+            patient_id=patient_id,
+            sub=auth_context.get("sub") if auth_context else None,
+            request_id=auth_context.get("request_id") if auth_context else None,
+            decision="allow",
+            reason="authz_disabled",
+        )
+        return None
+
+    # Extract auth info
+    sub = auth_context.get("sub") if auth_context else None
+    request_id = auth_context.get("request_id") if auth_context else None
+
+    # Deny if no auth context
+    if not auth_context or not sub:
+        log_authz_decision(
+            tool=tool_name,
+            patient_id=patient_id,
+            sub=sub,
+            request_id=request_id,
+            decision="deny",
+            reason="missing_auth_context",
+        )
+        return {
+            "error": "forbidden",
+            "message": "Authentication required",
+            "request_id": request_id,
+        }
+
+    # Check patient access
+    if not authorize_patient_access(sub, patient_id):
+        log_authz_decision(
+            tool=tool_name,
+            patient_id=patient_id,
+            sub=sub,
+            request_id=request_id,
+            decision="deny",
+            reason="patient_access_denied",
+        )
+        return {
+            "error": "forbidden",
+            "message": f"User '{sub}' is not authorized to access patient {patient_id}",
+            "request_id": request_id,
+        }
+
+    # Authorized
+    log_authz_decision(
+        tool=tool_name,
+        patient_id=patient_id,
+        sub=sub,
+        request_id=request_id,
+        decision="allow",
+    )
+    return None
+
+
+# ============================================================================
 # MCP Tools - Patient Health Information
 # ============================================================================
 
 @mcp.tool()
-async def list_patients() -> dict:
+async def list_patients(auth_context: dict | None = None) -> dict:
     """
     List all patients in the system.
     Returns basic info for patient selection dropdown.
     """
+    # No patient-specific authz needed for listing
     logger.info("Tool called: list_patients")
     patients = await get_all_patients()
     logger.debug(f"Found {len(patients)} patients")
@@ -76,7 +161,7 @@ async def list_patients() -> dict:
 
 
 @mcp.tool()
-async def get_patient_demographics(patient_id: int) -> dict:
+async def get_patient_demographics(patient_id: int, auth_context: dict | None = None) -> dict:
     """
     Get demographic information for a specific patient.
 
@@ -87,6 +172,12 @@ async def get_patient_demographics(patient_id: int) -> dict:
         Patient demographics including name, DOB, address, contact info, member ID
     """
     logger.info(f"Tool called: get_patient_demographics(patient_id={patient_id})")
+
+    # Check authorization
+    authz_error = check_patient_authorization("get_patient_demographics", patient_id, auth_context)
+    if authz_error:
+        return authz_error
+
     patient = await get_patient_by_id(patient_id)
     if not patient:
         return {"error": f"Patient with ID {patient_id} not found"}
@@ -94,7 +185,7 @@ async def get_patient_demographics(patient_id: int) -> dict:
 
 
 @mcp.tool()
-async def get_medical_records(patient_id: int) -> dict:
+async def get_medical_records(patient_id: int, auth_context: dict | None = None) -> dict:
     """
     Get medical records and diagnoses for a patient.
 
@@ -105,6 +196,12 @@ async def get_medical_records(patient_id: int) -> dict:
         List of medical conditions, diagnoses, and their status
     """
     logger.info(f"Tool called: get_medical_records(patient_id={patient_id})")
+
+    # Check authorization
+    authz_error = check_patient_authorization("get_medical_records", patient_id, auth_context)
+    if authz_error:
+        return authz_error
+
     conditions = await get_patient_conditions(patient_id)
     return {
         "patient_id": patient_id,
@@ -114,7 +211,7 @@ async def get_medical_records(patient_id: int) -> dict:
 
 
 @mcp.tool()
-async def get_prescriptions(patient_id: int, active_only: bool = True) -> dict:
+async def get_prescriptions(patient_id: int, active_only: bool = True, auth_context: dict | None = None) -> dict:
     """
     Get prescription medications for a patient.
 
@@ -126,6 +223,12 @@ async def get_prescriptions(patient_id: int, active_only: bool = True) -> dict:
         List of prescriptions with medication details, dosage, and pharmacy info
     """
     logger.info(f"Tool called: get_prescriptions(patient_id={patient_id}, active_only={active_only})")
+
+    # Check authorization
+    authz_error = check_patient_authorization("get_prescriptions", patient_id, auth_context)
+    if authz_error:
+        return authz_error
+
     prescriptions = await get_patient_prescriptions(patient_id, active_only)
     return {
         "patient_id": patient_id,
@@ -136,7 +239,7 @@ async def get_prescriptions(patient_id: int, active_only: bool = True) -> dict:
 
 
 @mcp.tool()
-async def get_appointments(patient_id: int, upcoming_only: bool = True) -> dict:
+async def get_appointments(patient_id: int, upcoming_only: bool = True, auth_context: dict | None = None) -> dict:
     """
     Get appointments for a patient.
 
@@ -148,6 +251,12 @@ async def get_appointments(patient_id: int, upcoming_only: bool = True) -> dict:
         List of appointments with provider, date, location, and reason
     """
     logger.info(f"Tool called: get_appointments(patient_id={patient_id}, upcoming_only={upcoming_only})")
+
+    # Check authorization
+    authz_error = check_patient_authorization("get_appointments", patient_id, auth_context)
+    if authz_error:
+        return authz_error
+
     appointments = await get_patient_appointments(patient_id, upcoming_only)
     return {
         "patient_id": patient_id,
@@ -158,7 +267,7 @@ async def get_appointments(patient_id: int, upcoming_only: bool = True) -> dict:
 
 
 @mcp.tool()
-async def get_insurance_info(patient_id: int) -> dict:
+async def get_insurance_info(patient_id: int, auth_context: dict | None = None) -> dict:
     """
     Get insurance information for a patient.
 
@@ -169,6 +278,12 @@ async def get_insurance_info(patient_id: int) -> dict:
         Insurance details including provider, plan, policy numbers, and coverage info
     """
     logger.info(f"Tool called: get_insurance_info(patient_id={patient_id})")
+
+    # Check authorization
+    authz_error = check_patient_authorization("get_insurance_info", patient_id, auth_context)
+    if authz_error:
+        return authz_error
+
     insurance = await get_patient_insurance(patient_id)
     return {
         "patient_id": patient_id,
@@ -178,7 +293,7 @@ async def get_insurance_info(patient_id: int) -> dict:
 
 
 @mcp.tool()
-async def get_lab_results(patient_id: int, limit: int = 20) -> dict:
+async def get_lab_results(patient_id: int, limit: int = 20, auth_context: dict | None = None) -> dict:
     """
     Get laboratory test results for a patient.
 
@@ -190,6 +305,12 @@ async def get_lab_results(patient_id: int, limit: int = 20) -> dict:
         List of lab results with test names, values, reference ranges, and status
     """
     logger.info(f"Tool called: get_lab_results(patient_id={patient_id}, limit={limit})")
+
+    # Check authorization
+    authz_error = check_patient_authorization("get_lab_results", patient_id, auth_context)
+    if authz_error:
+        return authz_error
+
     results = await get_patient_lab_results(patient_id, limit)
     return {
         "patient_id": patient_id,

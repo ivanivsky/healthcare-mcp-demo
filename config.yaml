@@ -32,6 +32,14 @@ claude:
 database:
   path: "data/health_advisor.db"
 
+# Authorization (tool-level access control)
+authz:
+  enabled: true  # Set to false to disable authorization checks
+  user_patient_map:
+    alice: 1      # alice can only access patient_id=1
+    bob: 2        # bob can only access patient_id=2
+    demo_user: 1  # default demo user can access patient_id=1
+
 # Security Controls (toggle for vulnerability demonstrations)
 security:
   authentication:

@@ -12,6 +12,7 @@ import anthropic
 from backend.config import get_config, get_anthropic_api_key
 from backend.mcp_client import MCPClient
 from backend.debug_logger import DebugLogger
+from backend.auth_context import AuthContext
 
 logger = logging.getLogger("claude_agent")
 
@@ -67,6 +68,7 @@ Available tools allow you to:
         patient_id: int,
         patient_name: str,
         conversation_history: list[dict] = None,
+        auth: AuthContext = None,
     ) -> dict:
         """
         Process a chat message and return a response.
@@ -76,6 +78,7 @@ Available tools allow you to:
             patient_id: Current patient ID
             patient_name: Current patient name
             conversation_history: Previous messages in the conversation
+            auth: Authentication context for identity tracking
 
         Returns:
             Response with assistant message and debug info
@@ -88,12 +91,14 @@ Available tools allow you to:
         # Build messages
         messages = conversation_history + [{"role": "user", "content": message}]
 
-        # Log the request
+        # Log the request with auth context
         self.debug_logger.log_claude_request({
             "model": self.model,
             "system": self._get_system_prompt(patient_id, patient_name)[:200] + "...",
             "messages": messages,
             "tools": [t["name"] for t in tools],
+            "request_id": auth.request_id if auth else None,
+            "sub": auth.sub if auth else None,
         })
 
         # Initial Claude API call
@@ -112,7 +117,7 @@ Available tools allow you to:
 
         # Process response and handle tool calls
         return await self._process_response(
-            response, messages, tools, patient_id, patient_name
+            response, messages, tools, patient_id, patient_name, auth
         )
 
     async def _process_response(
@@ -122,6 +127,7 @@ Available tools allow you to:
         tools: list[dict],
         patient_id: int,
         patient_name: str,
+        auth: AuthContext = None,
     ) -> dict:
         """Process Claude response and handle any tool calls."""
         tool_calls = []
@@ -154,11 +160,13 @@ Available tools allow you to:
                 self.debug_logger.log_mcp_request({
                     "tool": tool_use.name,
                     "arguments": tool_use.input,
+                    "request_id": auth.request_id if auth else None,
+                    "sub": auth.sub if auth else None,
                 })
 
                 try:
                     result = await self.mcp_client.call_tool(
-                        tool_use.name, tool_use.input
+                        tool_use.name, tool_use.input, auth=auth
                     )
 
                     # Parse the result content
@@ -215,6 +223,8 @@ Available tools allow you to:
                 "model": self.model,
                 "continuation": True,
                 "tool_results_count": len(tool_results),
+                "request_id": auth.request_id if auth else None,
+                "sub": auth.sub if auth else None,
             })
 
             response = self.client.messages.create(

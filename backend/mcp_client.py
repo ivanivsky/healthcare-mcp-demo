@@ -13,6 +13,7 @@ from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client, StdioServerParameters
 
 from backend.config import get_config
+from backend.auth_context import AuthContext
 
 logger = logging.getLogger("mcp_client")
 
@@ -134,13 +135,16 @@ class MCPClient:
             for tool in self.tools
         ]
 
-    async def call_tool(self, name: str, arguments: dict[str, Any]) -> dict:
+    async def call_tool(
+        self, name: str, arguments: dict[str, Any], auth: AuthContext | None = None
+    ) -> dict:
         """
         Call an MCP tool and return the result.
 
         Args:
             name: Tool name
             arguments: Tool arguments
+            auth: Optional authentication context for tracing
 
         Returns:
             Tool execution result
@@ -148,9 +152,24 @@ class MCPClient:
         if not self.session:
             raise RuntimeError("Not connected to MCP server")
 
-        logger.info(f"Calling MCP tool: {name} with args: {arguments}")
+        # Log with identity context for tracing
+        log_context = {
+            "tool": name,
+            "request_id": auth.request_id if auth else None,
+            "sub": auth.sub if auth else None,
+        }
+        logger.info(f"Calling MCP tool: {log_context}")
 
-        result = await self.session.call_tool(name, arguments)
+        # Inject auth_context into arguments for server-side authorization
+        # Do not overwrite if already present (defense in depth)
+        call_arguments = dict(arguments)
+        if "auth_context" not in call_arguments and auth is not None:
+            call_arguments["auth_context"] = {
+                "sub": auth.sub,
+                "request_id": auth.request_id,
+            }
+
+        result = await self.session.call_tool(name, call_arguments)
 
         # Extract content from result
         content = []

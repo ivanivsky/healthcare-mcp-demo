@@ -24,6 +24,7 @@ from backend.config import get_config
 from backend.mcp_client import get_mcp_client, shutdown_mcp_client
 from backend.claude_agent import HealthAdvisorAgent
 from backend.debug_logger import get_debug_logger
+from backend.auth import get_auth_context
 
 # Load config
 config = get_config()
@@ -151,8 +152,8 @@ async def list_patients():
             return data.get("patients", [])
         return []
     except Exception as e:
-        logger.error(f"Error listing patients: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Error listing patients:")
+        raise HTTPException(status_code=500, detail=f"Failed to list patients: {type(e).__name__}: {str(e)}")
 
 
 @app.get("/api/patients/{patient_id}")
@@ -171,12 +172,12 @@ async def get_patient(patient_id: int):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting patient: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error getting patient:")
+        raise HTTPException(status_code=500, detail=f"Failed to get patient: {type(e).__name__}: {str(e)}")
 
 
 @app.post("/api/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
+async def chat(request: Request, chat_request: ChatRequest):
     """Process a chat message through the Claude agent."""
     if not agent:
         raise HTTPException(
@@ -184,24 +185,30 @@ async def chat(request: ChatRequest):
             detail="Agent not ready. Make sure MCP server is running."
         )
 
+    # Extract auth context from request
+    auth = get_auth_context(request)
+
     debug_logger = get_debug_logger()
     debug_logger.log_agent_reasoning({
         "action": "chat_request",
-        "patient_id": request.patient_id,
-        "message_preview": request.message[:100],
+        "patient_id": chat_request.patient_id,
+        "message_preview": chat_request.message[:100],
+        "request_id": auth.request_id,
+        "sub": auth.sub,
     })
 
     try:
         result = await agent.chat(
-            message=request.message,
-            patient_id=request.patient_id,
-            patient_name=request.patient_name,
-            conversation_history=request.conversation_history or [],
+            message=chat_request.message,
+            patient_id=chat_request.patient_id,
+            patient_name=chat_request.patient_name,
+            conversation_history=chat_request.conversation_history or [],
+            auth=auth,
         )
         return ChatResponse(**result)
     except Exception as e:
         logger.error(f"Chat error: {e}")
-        debug_logger.log_error({"error": str(e), "type": "chat_error"})
+        debug_logger.log_error({"error": str(e), "type": "chat_error", "request_id": auth.request_id})
         raise HTTPException(status_code=500, detail=str(e))
 
 
