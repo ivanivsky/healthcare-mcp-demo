@@ -96,12 +96,15 @@ if not session_secret:
     session_secret = secrets.token_hex(32)
     logger.warning("SESSION_SECRET not set; using generated secret (sessions won't persist across restarts)")
 
+# Use HTTPS-only cookies when in production (Cloud Run is always HTTPS)
+https_only = os.environ.get("HTTPS_ONLY", "false").lower() == "true"
+
 app.add_middleware(
     SessionMiddleware,
     secret_key=session_secret,
     session_cookie="mha_session",
     same_site="lax",
-    https_only=False,  # Set True in production with HTTPS
+    https_only=https_only,
 )
 
 # CORS middleware

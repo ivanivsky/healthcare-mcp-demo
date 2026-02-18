@@ -1,5 +1,5 @@
 #!/bin/bash
-# Health Advisor - Cloud Run Deployment Script
+# My Health Access - Cloud Run Deployment Script
 # Usage: ./deploy.sh [mcp|backend|all]
 
 set -e
@@ -10,14 +10,14 @@ REGION="us-central1"
 REGISTRY="us-central1-docker.pkg.dev/${PROJECT_ID}/healthcare-mcp"
 
 # Service names
-MCP_SERVICE="health-advisor-mcp"
-BACKEND_SERVICE="health-advisor-backend"
+MCP_SERVICE="my-health-access-mcp"
+BACKEND_SERVICE="my-health-access-backend"
 
 # Image names
 MCP_IMAGE="${REGISTRY}/mcp-server:latest"
 BACKEND_IMAGE="${REGISTRY}/backend:latest"
 
-echo "=== Health Advisor Cloud Run Deployment ==="
+echo "=== My Health Access Cloud Run Deployment ==="
 echo "Project: ${PROJECT_ID}"
 echo "Region: ${REGION}"
 echo ""
@@ -109,8 +109,8 @@ deploy_backend() {
         --cpu 1 \
         --min-instances 0 \
         --max-instances 5 \
-        --set-env-vars "BACKEND_HOST=0.0.0.0,BACKEND_PORT=8080,MCP_SERVER_URL=${MCP_SERVER_URL}" \
-        --set-secrets "ANTHROPIC_API_KEY=anthropic-api-key:latest"
+        --set-env-vars "BACKEND_HOST=0.0.0.0,BACKEND_PORT=8080,MCP_SERVER_URL=${MCP_SERVER_URL},HTTPS_ONLY=true" \
+        --set-secrets "ANTHROPIC_API_KEY=anthropic-api-key:latest,SESSION_SECRET=session-secret:latest"
 
     # Get the backend URL
     BACKEND_URL=$(gcloud run services describe ${BACKEND_SERVICE} \

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Health Advisor - GCP Setup Script
+# My Health Access - GCP Setup Script
 # Run this once before deploying to set up secrets and permissions
 
 set -e
@@ -7,7 +7,7 @@ set -e
 PROJECT_ID="healthcare-demo-app"
 REGION="us-central1"
 
-echo "=== Health Advisor GCP Setup ==="
+echo "=== My Health Access GCP Setup ==="
 echo "Project: ${PROJECT_ID}"
 echo ""
 
@@ -29,7 +29,7 @@ gcloud artifacts repositories create healthcare-mcp \
     --repository-format=docker \
     --location=${REGION} \
     --project=${PROJECT_ID} \
-    --description="Health Advisor MCP Demo images" 2>/dev/null || echo "  Repository already exists"
+    --description="My Health Access MCP Demo images" 2>/dev/null || echo "  Repository already exists"
 
 # Create secret for Anthropic API key
 echo ""
@@ -72,11 +72,33 @@ else
     echo "  Secret created!"
 fi
 
-# Grant Cloud Run service account access to the secret
+# Create secret for session (used by SessionMiddleware)
+echo ""
+echo ">>> Setting up Session secret..."
+
+if gcloud secrets describe session-secret --project ${PROJECT_ID} &>/dev/null; then
+    echo "  Secret 'session-secret' already exists."
+else
+    echo "  Creating new secret 'session-secret' with random value..."
+    # Generate a random 64-character hex string for session secret
+    SESSION_SECRET=$(openssl rand -hex 32)
+    echo -n "${SESSION_SECRET}" | gcloud secrets create session-secret \
+        --data-file=- \
+        --project ${PROJECT_ID}
+    echo "  Secret created!"
+fi
+
+# Grant Cloud Run service account access to secrets
 echo ""
 echo ">>> Granting Cloud Run access to secrets..."
 PROJECT_NUMBER=$(gcloud projects describe ${PROJECT_ID} --format='value(projectNumber)')
+
 gcloud secrets add-iam-policy-binding anthropic-api-key \
+    --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
+    --role="roles/secretmanager.secretAccessor" \
+    --project ${PROJECT_ID}
+
+gcloud secrets add-iam-policy-binding session-secret \
     --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
     --role="roles/secretmanager.secretAccessor" \
     --project ${PROJECT_ID}
