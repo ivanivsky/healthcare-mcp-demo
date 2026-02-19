@@ -4,6 +4,7 @@ My Health Access Backend API
 FastAPI application that serves as the MCP client and Claude agent orchestrator.
 """
 
+import asyncio
 import logging
 import os
 import secrets
@@ -23,7 +24,7 @@ from starlette.middleware.sessions import SessionMiddleware
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from backend.config import get_config
-from backend.mcp_client import get_mcp_client, shutdown_mcp_client
+from backend.mcp_client import get_mcp_client, shutdown_mcp_client, reset_mcp_client
 from backend.claude_agent import HealthAdvisorAgent
 from backend.debug_logger import get_debug_logger
 from backend.auth import get_auth_context, VALID_USERS
@@ -53,6 +54,105 @@ if config.get("logging", {}).get("log_to_file", False):
 # Global state
 mcp_client = None
 agent = None
+mcp_reconnect_lock = asyncio.Lock()
+
+
+# ============================================================================
+# MCP Connection Management
+# ============================================================================
+
+def is_connection_error(exc: Exception) -> bool:
+    """Check if an exception indicates a connection failure."""
+    error_indicators = (
+        "connection",
+        "connect",
+        "closed",
+        "eof",
+        "disconnected",
+        "broken pipe",
+        "reset by peer",
+        "timed out",
+        "refused",
+    )
+    error_str = str(exc).lower()
+    error_type = type(exc).__name__.lower()
+    return any(ind in error_str or ind in error_type for ind in error_indicators)
+
+
+async def ensure_mcp_connected():
+    """
+    Ensure MCP client is connected, attempting reconnect if needed.
+
+    Uses a lock to prevent thundering herd on reconnect.
+    Pings the connection on fast path to detect dead SSE sessions.
+
+    Returns:
+        Tuple of (mcp_client, agent)
+
+    Raises:
+        HTTPException(503) if connection cannot be established
+    """
+    global mcp_client, agent
+
+    # Fast path: already connected - verify with ping
+    if mcp_client is not None and agent is not None:
+        try:
+            await mcp_client.ping()
+            return mcp_client, agent
+        except Exception as e:
+            logger.warning(f"MCP ping failed on fast path: {e}")
+            invalidate_mcp_connection()
+
+    # Acquire lock to prevent thundering herd
+    async with mcp_reconnect_lock:
+        # Re-check inside lock - another request may have reconnected
+        if mcp_client is not None and agent is not None:
+            try:
+                await mcp_client.ping()
+                return mcp_client, agent
+            except Exception as e:
+                logger.warning(f"MCP ping failed inside lock: {e}")
+                invalidate_mcp_connection()
+
+        debug_logger = get_debug_logger()
+
+        # Attempt connection with one retry for transient startup timing
+        max_attempts = 2
+        last_error = None
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                logger.info(f"MCP reconnect attempt {attempt}/{max_attempts}...")
+                mcp_client = await get_mcp_client()
+                agent = HealthAdvisorAgent(mcp_client, debug_logger)
+                logger.info("MCP connection established successfully")
+                return mcp_client, agent
+            except Exception as e:
+                last_error = e
+                logger.warning(f"MCP connection attempt {attempt} failed: {e}")
+                # Reset global state on failure
+                mcp_client = None
+                agent = None
+                reset_mcp_client()
+                if attempt < max_attempts:
+                    await asyncio.sleep(0.3)  # 300ms delay before retry
+
+        # All attempts failed
+        logger.error(f"Failed to connect to MCP server after {max_attempts} attempts: {last_error}")
+        raise HTTPException(
+            status_code=503,
+            detail="MCP server not connected. Please ensure the MCP server is running."
+        )
+
+
+def invalidate_mcp_connection():
+    """Invalidate the MCP connection so next request triggers reconnect."""
+    global mcp_client, agent
+    logger.warning("Invalidating MCP connection due to error")
+    mcp_client = None
+    agent = None
+    # Also reset the cached client in mcp_client module
+    reset_mcp_client()
 
 
 @asynccontextmanager
@@ -228,14 +328,14 @@ async def health_check():
 @app.get("/api/patients", response_model=list[PatientInfo])
 async def list_patients(request: Request):
     """Get list of patients for selector dropdown."""
-    if not mcp_client:
-        raise HTTPException(status_code=503, detail="MCP server not connected")
+    # Ensure MCP connection (auto-reconnect if needed)
+    client, _ = await ensure_mcp_connected()
 
     # Extract auth context from request
     auth = get_auth_context(request)
 
     try:
-        result = await mcp_client.call_tool("list_patients", {}, auth=auth)
+        result = await client.call_tool("list_patients", {}, auth=auth)
         # Parse the result
         content = result.get("content", [])
         if content and content[0].get("type") == "text":
@@ -244,21 +344,25 @@ async def list_patients(request: Request):
             return data.get("patients", [])
         return []
     except Exception as e:
-        logger.error("Error listing patients:")
+        # Check if this is a connection error - invalidate client for next request
+        if is_connection_error(e):
+            invalidate_mcp_connection()
+            raise HTTPException(status_code=503, detail="MCP connection lost. Please retry.")
+        logger.error(f"Error listing patients: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to list patients: {type(e).__name__}: {str(e)}")
 
 
 @app.get("/api/patients/{patient_id}")
 async def get_patient(request: Request, patient_id: int):
     """Get patient details."""
-    if not mcp_client:
-        raise HTTPException(status_code=503, detail="MCP server not connected")
+    # Ensure MCP connection (auto-reconnect if needed)
+    client, _ = await ensure_mcp_connected()
 
     # Extract auth context from request
     auth = get_auth_context(request)
 
     try:
-        result = await mcp_client.call_tool("get_patient_demographics", {"patient_id": patient_id}, auth=auth)
+        result = await client.call_tool("get_patient_demographics", {"patient_id": patient_id}, auth=auth)
         content = result.get("content", [])
         if content and content[0].get("type") == "text":
             import json
@@ -267,18 +371,19 @@ async def get_patient(request: Request, patient_id: int):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting patient:")
+        # Check if this is a connection error - invalidate client for next request
+        if is_connection_error(e):
+            invalidate_mcp_connection()
+            raise HTTPException(status_code=503, detail="MCP connection lost. Please retry.")
+        logger.error(f"Error getting patient: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get patient: {type(e).__name__}: {str(e)}")
 
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(request: Request, chat_request: ChatRequest):
     """Process a chat message through the Claude agent."""
-    if not agent:
-        raise HTTPException(
-            status_code=503,
-            detail="Agent not ready. Make sure MCP server is running."
-        )
+    # Ensure MCP connection (auto-reconnect if needed)
+    _, chat_agent = await ensure_mcp_connected()
 
     # Extract auth context from request
     auth = get_auth_context(request)
@@ -293,7 +398,7 @@ async def chat(request: Request, chat_request: ChatRequest):
     })
 
     try:
-        result = await agent.chat(
+        result = await chat_agent.chat(
             message=chat_request.message,
             patient_id=chat_request.patient_id,
             patient_name=chat_request.patient_name,
@@ -302,6 +407,10 @@ async def chat(request: Request, chat_request: ChatRequest):
         )
         return ChatResponse(**result)
     except Exception as e:
+        # Check if this is a connection error - invalidate client for next request
+        if is_connection_error(e):
+            invalidate_mcp_connection()
+            raise HTTPException(status_code=503, detail="MCP connection lost. Please retry.")
         logger.error(f"Chat error: {e}")
         debug_logger.log_error({"error": str(e), "type": "chat_error", "request_id": auth.request_id})
         raise HTTPException(status_code=500, detail=str(e))

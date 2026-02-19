@@ -107,7 +107,30 @@ class MCPClient:
             await self._context_manager.__aexit__(None, None, None)
             self._context_manager = None
 
+        # Clear streams to ensure clean state
+        self._read_stream = None
+        self._write_stream = None
+
         logger.info("Disconnected from MCP server")
+
+    async def ping(self) -> None:
+        """
+        Probe the MCP connection to verify it's alive.
+
+        Raises:
+            RuntimeError: If not connected or connection is dead
+        """
+        if not self.session:
+            raise RuntimeError("Not connected to MCP server")
+
+        # Use list_tools() as a lightweight probe - it exercises the streams
+        try:
+            await self.session.list_tools()
+        except Exception as e:
+            logger.warning(f"MCP ping failed: {e}")
+            # Mark session as dead
+            self.session = None
+            raise RuntimeError(f"MCP connection dead: {e}") from e
 
     async def _refresh_tools(self):
         """Refresh the list of available tools."""
@@ -169,7 +192,13 @@ class MCPClient:
                 "request_id": auth.request_id,
             }
 
-        result = await self.session.call_tool(name, call_arguments)
+        # Wrap call in try/except to fail closed on transport errors
+        try:
+            result = await self.session.call_tool(name, call_arguments)
+        except Exception as e:
+            logger.warning(f"MCP call_tool failed, marking session dead: {e}")
+            self.session = None
+            raise
 
         # Extract content from result
         content = []
@@ -209,3 +238,13 @@ async def shutdown_mcp_client():
     if _client:
         await _client.disconnect()
         _client = None
+
+
+def reset_mcp_client():
+    """
+    Reset the MCP client without graceful disconnect.
+    Used when connection is already broken and we need to force a fresh connection.
+    """
+    global _client
+    _client = None
+    logger.info("MCP client reset (will reconnect on next request)")
