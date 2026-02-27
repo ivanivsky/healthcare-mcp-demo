@@ -5,7 +5,9 @@ fastapi==0.115.0
 uvicorn[standard]==0.30.6
 
 # Anthropic Claude API
-anthropic==0.39.0
+# Note: 0.84.0 has a bug with by_alias=None passed to Pydantic v2 model_dump
+# Pinning to 0.49.0 which works with both httpx 0.28.x and Pydantic v2
+anthropic==0.49.0
 
 # MCP SDK
 mcp==1.2.0
@@ -17,8 +19,8 @@ aiosqlite==0.20.0
 pyyaml==6.0.1
 
 # HTTP Client (for MCP SSE transport)
-httpx==0.27.2
-httpx-sse==0.4.0
+httpx>=0.27.0
+httpx-sse>=0.4.0
 
 # Utilities
 python-dotenv==1.0.1
@@ -27,3 +29,6 @@ pydantic-settings==2.6.1
 
 # Session support (for Starlette SessionMiddleware)
 itsdangerous==2.2.0
+
+# Firebase Admin SDK (for ID token verification)
+firebase-admin==6.5.0

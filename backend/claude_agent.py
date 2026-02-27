@@ -10,7 +10,7 @@ from typing import Any, Optional
 import anthropic
 
 from backend.config import get_config, get_anthropic_api_key
-from backend.mcp_client import MCPClient
+from backend.mcp_client import MCPClient, MCPConnectionError
 from backend.debug_logger import DebugLogger
 from backend.auth_context import AuthContext
 
@@ -86,7 +86,9 @@ Available tools allow you to:
         conversation_history = conversation_history or []
 
         # Get MCP tools formatted for Claude
+        logger.info(f"AGENT_CHAT start patient_id={patient_id} message_len={len(message)}")
         tools = self.mcp_client.get_tools_for_claude()
+        logger.info(f"AGENT_CHAT tools_count={len(tools)} tools={[t['name'] for t in tools]}")
 
         # Build messages
         messages = conversation_history + [{"role": "user", "content": message}]
@@ -156,6 +158,7 @@ Available tools allow you to:
 
             # Execute all tool calls and collect results
             tool_results = []
+            logger.info(f"AGENT_TOOL_CALLS start count={len(tool_uses)} tools={[t.name for t in tool_uses]}")
             for tool_use in tool_uses:
                 self.debug_logger.log_mcp_request({
                     "tool": tool_use.name,
@@ -165,9 +168,11 @@ Available tools allow you to:
                 })
 
                 try:
+                    logger.info(f"AGENT_TOOL_CALL start tool={tool_use.name}")
                     result = await self.mcp_client.call_tool(
                         tool_use.name, tool_use.input, auth=auth
                     )
+                    logger.info(f"AGENT_TOOL_CALL end tool={tool_use.name} success=True")
 
                     # Parse the result content
                     result_text = ""
@@ -195,7 +200,7 @@ Available tools allow you to:
 
                 except Exception as e:
                     error_msg = f"Error calling tool {tool_use.name}: {str(e)}"
-                    logger.error(error_msg)
+                    logger.error(f"AGENT_TOOL_CALL end tool={tool_use.name} success=False error={e}")
 
                     tool_calls.append({
                         "tool": tool_use.name,

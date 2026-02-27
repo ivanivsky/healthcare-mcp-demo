@@ -70,6 +70,95 @@ body {
     background-color: var(--background-color);
 }
 
+/* Whoami Demo Section */
+.whoami-demo-section {
+    background-color: var(--surface-color);
+    border-bottom: 1px solid var(--border-color);
+    padding: 1rem 1.5rem;
+}
+
+.whoami-demo-card {
+    max-width: 800px;
+    margin: 0 auto;
+}
+
+.whoami-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.75rem;
+}
+
+.whoami-title {
+    font-weight: 600;
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+}
+
+.whoami-buttons {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.whoami-btn {
+    padding: 0.5rem 1rem;
+    background-color: #059669;
+    color: white;
+    border: none;
+    border-radius: 0.375rem;
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    white-space: nowrap;
+}
+
+.whoami-btn:hover {
+    background-color: #047857;
+}
+
+.whoami-btn:disabled {
+    background-color: #9ca3af;
+    cursor: not-allowed;
+}
+
+.whoami-clear-btn {
+    padding: 0.5rem 1rem;
+    background-color: #6b7280;
+    color: white;
+    border: none;
+    border-radius: 0.375rem;
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.whoami-clear-btn:hover {
+    background-color: #4b5563;
+}
+
+.whoami-result {
+    margin: 0;
+    padding: 1rem;
+    font-size: 13px;
+    min-height: 60px;
+    max-height: 240px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    font-family: 'SF Mono', Monaco, Consolas, 'Courier New', monospace;
+    line-height: 1.6;
+    background-color: #1e293b;
+    color: #e2e8f0;
+    border-radius: 0.5rem;
+    border: 1px solid var(--border-color);
+}
+
+.whoami-result:empty::before {
+    content: "Click 'Test /api/whoami' to verify Firebase authentication...";
+    color: #64748b;
+    font-style: italic;
+}
+
 /* Patient Context Bar */
 .patient-context {
     display: flex;
@@ -427,6 +516,58 @@ body {
 
 .login-btn:hover {
     background-color: var(--primary-hover);
+}
+
+/* Google Sign-In Button */
+.google-signin-btn {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    padding: 0.875rem 1.5rem;
+    background-color: white;
+    color: #444;
+    border: 1px solid #ddd;
+    border-radius: 0.5rem;
+    font-size: 1rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 0.2s, box-shadow 0.2s;
+    margin-bottom: 1rem;
+}
+
+.google-signin-btn:hover {
+    background-color: #f8f8f8;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.google-signin-btn svg {
+    flex-shrink: 0;
+}
+
+/* Demo button */
+.demo-btn {
+    padding: 0.5rem 1rem;
+    background-color: var(--secondary-color);
+    color: white;
+    border: none;
+    border-radius: 0.375rem;
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.demo-btn:hover {
+    background-color: #475569;
+}
+
+.demo-login-details {
+    margin-top: 1rem;
+}
+
+.demo-login-details summary {
+    user-select: none;
 }
 
 /* User info in header */

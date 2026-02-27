@@ -1,6 +1,16 @@
 /**
  * My Health Access - Main Application JavaScript
+ * Firebase Authentication Only
  */
+
+// Firebase Configuration
+const firebaseConfig = {
+    apiKey: "AIzaSyC9IgURwS2nCxnou6QwW--x07DRTaG63ZY",
+    authDomain: "healthcare-demo-app.firebaseapp.com",
+};
+
+// Initialize Firebase
+firebase.initializeApp(firebaseConfig);
 
 // State
 let currentPatient = null;
@@ -27,44 +37,92 @@ const loginError = document.getElementById('loginError');
 // API Base URL
 const API_BASE = '';
 
-// Fetch options with credentials for session cookies
-const fetchWithCredentials = (url, options = {}) => {
+/**
+ * Fetch with Firebase Authentication.
+ * Gets a fresh ID token and adds Authorization header.
+ */
+async function fetchWithFirebaseAuth(url, options = {}) {
+    const user = firebase.auth().currentUser;
+    if (!user) {
+        throw new Error('Not authenticated');
+    }
+
+    const token = await user.getIdToken();
+    const headers = {
+        ...options.headers,
+        'Authorization': `Bearer ${token}`,
+    };
+
     return fetch(url, {
         ...options,
-        credentials: 'include',
+        headers,
     });
-};
+}
 
 // ============================================================================
 // Initialization
 // ============================================================================
 
 document.addEventListener('DOMContentLoaded', () => {
-    checkAuthStatus();
-});
+    // Bind whoami button click handlers
+    const whoamiBtn = document.getElementById('whoamiBtn');
+    if (whoamiBtn) {
+        whoamiBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            callWhoami();
+        });
+    }
+    const whoamiClearBtn = document.getElementById('whoamiClearBtn');
+    if (whoamiClearBtn) {
+        whoamiClearBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            clearWhoamiResult();
+        });
+    }
 
-async function checkAuthStatus() {
-    try {
-        const response = await fetchWithCredentials(`${API_BASE}/api/auth/me`);
-        const data = await response.json();
+    // Bind access button click handlers
+    const accessBtn = document.getElementById('accessBtn');
+    if (accessBtn) {
+        accessBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            callAccess();
+        });
+    }
+    const accessClearBtn = document.getElementById('accessClearBtn');
+    if (accessClearBtn) {
+        accessClearBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            clearAccessResult();
+        });
+    }
 
-        if (data.authenticated) {
-            currentUser = data.sub;
-            showAuthenticatedUI();
-            loadPatients();
-            checkHealth();
+    // Listen for Firebase auth state changes
+    firebase.auth().onAuthStateChanged(async (user) => {
+        if (user) {
+            // User is signed in with Firebase
+            try {
+                currentUser = user.email || user.uid;
+                showAuthenticatedUI();
+                showWhoamiSection();
+                loadPatients();
+                checkHealth();
+            } catch (error) {
+                console.error('Error during auth state change:', error);
+                showLoginUI();
+            }
         } else {
+            // No Firebase user - show login
+            currentUser = null;
+            hideWhoamiSection();
             showLoginUI();
         }
-    } catch (error) {
-        console.error('Auth check error:', error);
-        showLoginUI();
-    }
-}
+    });
+});
 
 async function checkHealth() {
     try {
-        const response = await fetchWithCredentials(`${API_BASE}/api/health`);
+        // Health check is public, no auth needed
+        const response = await fetch(`${API_BASE}/api/health`);
         const data = await response.json();
 
         if (!data.mcp_connected) {
@@ -76,7 +134,7 @@ async function checkHealth() {
 }
 
 // ============================================================================
-// Authentication
+// Authentication (Firebase Only)
 // ============================================================================
 
 function showLoginUI() {
@@ -95,52 +153,12 @@ function showAuthenticatedUI() {
     patientSelect.disabled = false;
 }
 
-async function handleLogin(event) {
-    event.preventDefault();
-
-    const username = document.getElementById('username').value;
-    const password = document.getElementById('password').value;
-
-    // Hide previous errors
-    loginError.style.display = 'none';
-
-    try {
-        const response = await fetchWithCredentials(`${API_BASE}/api/auth/login`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ username, password }),
-        });
-
-        if (!response.ok) {
-            const data = await response.json();
-            showLoginError(data.message || 'Login failed');
-            return;
-        }
-
-        const data = await response.json();
-        currentUser = data.sub;
-        showAuthenticatedUI();
-        loadPatients();
-        checkHealth();
-
-        // Clear form
-        document.getElementById('username').value = '';
-        document.getElementById('password').value = '';
-    } catch (error) {
-        console.error('Login error:', error);
-        showLoginError('Unable to connect to server');
-    }
-}
-
 async function handleLogout() {
+    // Sign out from Firebase
     try {
-        await fetchWithCredentials(`${API_BASE}/api/auth/logout`, {
-            method: 'POST',
-        });
+        await firebase.auth().signOut();
     } catch (error) {
-        console.error('Logout error:', error);
+        console.error('Firebase sign out error:', error);
     }
 
     // Reset state
@@ -152,6 +170,9 @@ async function handleLogout() {
     clearPatientInfo();
     clearMessages();
 
+    // Hide whoami section
+    hideWhoamiSection();
+
     // Show login
     showLoginUI();
 }
@@ -162,15 +183,176 @@ function showLoginError(message) {
 }
 
 // ============================================================================
+// Firebase Google Sign-In
+// ============================================================================
+
+async function handleGoogleSignIn() {
+    const provider = new firebase.auth.GoogleAuthProvider();
+
+    try {
+        // Try popup first
+        await firebase.auth().signInWithPopup(provider);
+        // Auth state change will be handled by onAuthStateChanged
+    } catch (error) {
+        if (error.code === 'auth/popup-blocked') {
+            // Fallback to redirect if popup is blocked
+            console.log('Popup blocked, using redirect...');
+            await firebase.auth().signInWithRedirect(provider);
+        } else {
+            console.error('Google Sign-In error:', error);
+            showLoginError(error.message || 'Sign-in failed');
+        }
+    }
+}
+
+function showWhoamiSection() {
+    const whoamiSection = document.getElementById('whoamiSection');
+    const user = firebase.auth().currentUser;
+    if (whoamiSection && user) {
+        whoamiSection.style.display = 'block';
+    }
+}
+
+function hideWhoamiSection() {
+    const whoamiSection = document.getElementById('whoamiSection');
+    if (whoamiSection) {
+        whoamiSection.style.display = 'none';
+    }
+    // Clear any previous results
+    const resultEl = document.getElementById('whoamiResult');
+    if (resultEl) {
+        resultEl.textContent = '';
+    }
+}
+
+function clearWhoamiResult() {
+    const resultEl = document.getElementById('whoamiResult');
+    if (resultEl) {
+        resultEl.textContent = '';
+    }
+}
+
+async function callWhoami() {
+    const resultEl = document.getElementById('whoamiResult');
+    if (!resultEl) return;
+
+    try {
+        // Check if user is signed in
+        const user = firebase.auth().currentUser;
+        console.log("WHOAMI: user signed in?", !!user);
+
+        if (!user) {
+            resultEl.textContent = JSON.stringify({
+                error: "NOT_SIGNED_IN",
+                message: "No Firebase user is currently signed in."
+            }, null, 2);
+            return;
+        }
+
+        resultEl.textContent = 'Fetching token and calling /api/whoami...';
+
+        // Fetch fresh ID token at call time
+        const token = await user.getIdToken();
+        console.log("WHOAMI: token fetched?", !!token);
+
+        // Build URL explicitly as same-origin
+        const url = `${window.location.origin}/api/whoami`;
+        console.log("WHOAMI: calling URL", url);
+
+        // Build headers with Authorization
+        const headers = {
+            'Authorization': `Bearer ${token}`,
+            'Accept': 'application/json'
+        };
+        console.log("WHOAMI: headers keys", Object.keys(headers));
+
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: headers
+        });
+
+        const data = await response.json();
+        resultEl.textContent = JSON.stringify(data, null, 2);
+    } catch (error) {
+        console.error('Whoami error:', error);
+        resultEl.textContent = JSON.stringify({
+            error: "CALL_FAILED",
+            message: error.message || "Unknown error occurred"
+        }, null, 2);
+    }
+}
+
+// ============================================================================
+// /api/access Tester
+// ============================================================================
+
+async function callAccess() {
+    const resultEl = document.getElementById('accessResult');
+    if (!resultEl) return;
+
+    try {
+        const user = firebase.auth().currentUser;
+
+        if (!user) {
+            resultEl.textContent = JSON.stringify({
+                error: "NOT_SIGNED_IN",
+                message: "No Firebase user is currently signed in."
+            }, null, 2);
+            return;
+        }
+
+        resultEl.textContent = 'Fetching token and calling /api/access...';
+
+        const token = await user.getIdToken();
+        const url = `${window.location.origin}/api/access`;
+
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Accept': 'application/json'
+            }
+        });
+
+        const data = await response.json();
+        resultEl.textContent = JSON.stringify(data, null, 2);
+    } catch (error) {
+        console.error('Access error:', error);
+        resultEl.textContent = JSON.stringify({
+            error: "CALL_FAILED",
+            message: error.message || "Unknown error occurred"
+        }, null, 2);
+    }
+}
+
+function clearAccessResult() {
+    const resultEl = document.getElementById('accessResult');
+    if (resultEl) {
+        resultEl.textContent = '';
+    }
+}
+
+// Attach to window for inline onclick handlers
+window.callWhoami = callWhoami;
+window.clearWhoamiResult = clearWhoamiResult;
+window.callAccess = callAccess;
+window.clearAccessResult = clearAccessResult;
+
+// ============================================================================
 // Patient Management
 // ============================================================================
 
 async function loadPatients() {
     try {
-        const response = await fetchWithCredentials(`${API_BASE}/api/patients`);
+        const response = await fetchWithFirebaseAuth(`${API_BASE}/api/patients`);
 
         if (!response.ok) {
-            throw new Error('Failed to load patients');
+            const error = await response.json();
+            // Handle 403 specifically
+            if (response.status === 403) {
+                throw new Error('You do not have access to any patients.');
+            }
+            throw new Error(error.detail?.message || error.detail || 'Failed to load patients');
         }
 
         const patients = await response.json();
@@ -183,10 +365,14 @@ async function loadPatients() {
             option.textContent = `${patient.first_name} ${patient.last_name} (${patient.member_id})`;
             patientSelect.appendChild(option);
         });
+
+        if (patients.length === 0) {
+            addSystemMessage('No patients available. Use "Test /api/whoami" to get your UID, then grant patient access.');
+        }
     } catch (error) {
         console.error('Error loading patients:', error);
         patientSelect.innerHTML = '<option value="">Error loading patients</option>';
-        addSystemMessage('Error: Could not load patient list. Please ensure MCP server is running.');
+        addSystemMessage(`Error: Could not load patient list. ${error.message}`);
     }
 }
 
@@ -200,7 +386,13 @@ async function handlePatientChange() {
     }
 
     try {
-        const response = await fetchWithCredentials(`${API_BASE}/api/patients/${patientId}`);
+        const response = await fetchWithFirebaseAuth(`${API_BASE}/api/patients/${patientId}`);
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail?.message || error.detail || 'Failed to load patient');
+        }
+
         const data = await response.json();
 
         if (data.patient) {
@@ -215,7 +407,7 @@ async function handlePatientChange() {
         }
     } catch (error) {
         console.error('Error loading patient:', error);
-        addSystemMessage('Error loading patient information.');
+        addSystemMessage(`Error: ${error.message}`);
     }
 }
 
@@ -281,7 +473,7 @@ async function sendMessage(message) {
     showLoading(true);
 
     try {
-        const response = await fetchWithCredentials(`${API_BASE}/api/chat`, {
+        const response = await fetchWithFirebaseAuth(`${API_BASE}/api/chat`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -296,7 +488,7 @@ async function sendMessage(message) {
 
         if (!response.ok) {
             const error = await response.json();
-            throw new Error(error.detail || 'Chat request failed');
+            throw new Error(error.detail?.message || error.detail || 'Chat request failed');
         }
 
         const data = await response.json();

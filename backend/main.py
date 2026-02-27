@@ -2,32 +2,54 @@
 My Health Access Backend API
 
 FastAPI application that serves as the MCP client and Claude agent orchestrator.
+Uses Firebase Authentication exclusively - no session/cookie auth.
 """
 
 import asyncio
+import json
 import logging
 import os
-import secrets
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from starlette.middleware.sessions import SessionMiddleware
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from backend.config import get_config
-from backend.mcp_client import get_mcp_client, shutdown_mcp_client, reset_mcp_client
+from backend.mcp_client import (
+    get_mcp_client,
+    shutdown_mcp_client,
+    reset_mcp_client,
+    ensure_mcp_client_connected,
+    start_keepalive,
+    MCPConnectionError,
+)
 from backend.claude_agent import HealthAdvisorAgent
 from backend.debug_logger import get_debug_logger
-from backend.auth import get_auth_context, VALID_USERS
+from backend.firebase_auth import (
+    init_firebase,
+    require_firebase_auth,
+    log_auth_decision,
+    FirebaseUser,
+)
+from backend.patient_access import (
+    init_patient_access_db,
+    seed_patient_access,
+    get_allowed_patient_ids,
+    check_patient_access,
+)
+from backend.patient_db import (
+    get_patients_by_ids,
+    get_patient_by_id as get_patient_from_db,
+)
 
 # Load config
 config = get_config()
@@ -83,8 +105,7 @@ async def ensure_mcp_connected():
     """
     Ensure MCP client is connected, attempting reconnect if needed.
 
-    Uses a lock to prevent thundering herd on reconnect.
-    Pings the connection on fast path to detect dead SSE sessions.
+    Uses the MCPClient's built-in ensure_connected() with auto-reconnect.
 
     Returns:
         Tuple of (mcp_client, agent)
@@ -94,54 +115,29 @@ async def ensure_mcp_connected():
     """
     global mcp_client, agent
 
-    # Fast path: already connected - verify with ping
-    if mcp_client is not None and agent is not None:
-        try:
-            await mcp_client.ping()
-            return mcp_client, agent
-        except Exception as e:
-            logger.warning(f"MCP ping failed on fast path: {e}")
-            invalidate_mcp_connection()
+    try:
+        # Use the MCP client's ensure_connected which handles reconnection
+        mcp_client = await ensure_mcp_client_connected()
 
-    # Acquire lock to prevent thundering herd
-    async with mcp_reconnect_lock:
-        # Re-check inside lock - another request may have reconnected
-        if mcp_client is not None and agent is not None:
-            try:
-                await mcp_client.ping()
-                return mcp_client, agent
-            except Exception as e:
-                logger.warning(f"MCP ping failed inside lock: {e}")
-                invalidate_mcp_connection()
+        # Create agent if needed
+        if agent is None:
+            debug_logger = get_debug_logger()
+            agent = HealthAdvisorAgent(mcp_client, debug_logger)
 
-        debug_logger = get_debug_logger()
+        return mcp_client, agent
 
-        # Attempt connection with one retry for transient startup timing
-        max_attempts = 2
-        last_error = None
-
-        for attempt in range(1, max_attempts + 1):
-            try:
-                logger.info(f"MCP reconnect attempt {attempt}/{max_attempts}...")
-                mcp_client = await get_mcp_client()
-                agent = HealthAdvisorAgent(mcp_client, debug_logger)
-                logger.info("MCP connection established successfully")
-                return mcp_client, agent
-            except Exception as e:
-                last_error = e
-                logger.warning(f"MCP connection attempt {attempt} failed: {e}")
-                # Reset global state on failure
-                mcp_client = None
-                agent = None
-                reset_mcp_client()
-                if attempt < max_attempts:
-                    await asyncio.sleep(0.3)  # 300ms delay before retry
-
-        # All attempts failed
-        logger.error(f"Failed to connect to MCP server after {max_attempts} attempts: {last_error}")
+    except MCPConnectionError as e:
+        logger.error(f"MCP connection failed: {e}")
+        # Reset state on failure
+        mcp_client = None
+        agent = None
         raise HTTPException(
             status_code=503,
-            detail="MCP server not connected. Please ensure the MCP server is running."
+            detail={
+                "error": "MCP_UNAVAILABLE",
+                "message": "MCP server not connected",
+                "reason": "mcp_connection_failed",
+            }
         )
 
 
@@ -162,6 +158,25 @@ async def lifespan(app: FastAPI):
 
     logger.info("Starting My Health Access backend...")
 
+    # Log SDK versions for debugging compatibility issues
+    try:
+        import anthropic
+        import httpx
+        logger.info(f"SDK_VERSIONS anthropic={anthropic.__version__} httpx={httpx.__version__}")
+    except Exception as e:
+        logger.warning(f"Could not log SDK versions: {e}")
+
+    # Initialize Firebase Admin SDK
+    if init_firebase():
+        logger.info("Firebase authentication enabled")
+    else:
+        logger.warning("Firebase authentication not available (missing credentials)")
+
+    # Initialize patient access database
+    await init_patient_access_db()
+    await seed_patient_access()
+    logger.info("Patient access database initialized")
+
     # Initialize debug logger
     debug_logger = get_debug_logger()
 
@@ -170,6 +185,8 @@ async def lifespan(app: FastAPI):
         mcp_client = await get_mcp_client()
         agent = HealthAdvisorAgent(mcp_client, debug_logger)
         logger.info("Connected to MCP server")
+        # Start keepalive to maintain SSE connection
+        start_keepalive(interval_seconds=25)
     except Exception as e:
         logger.warning(f"Could not connect to MCP server: {e}")
         logger.warning("Chat functionality will be unavailable until MCP server is running")
@@ -184,27 +201,9 @@ async def lifespan(app: FastAPI):
 # Create FastAPI app
 app = FastAPI(
     title="My Health Access API",
-    description="Backend API for My Health Access healthcare demo",
-    version="1.0.0",
+    description="Backend API for My Health Access healthcare demo (Firebase Auth only)",
+    version="2.0.0",
     lifespan=lifespan,
-)
-
-# Session middleware - use SESSION_SECRET from env or generate safe fallback
-session_secret = os.environ.get("SESSION_SECRET")
-if not session_secret:
-    # Generate a persistent secret for local dev (logged warning)
-    session_secret = secrets.token_hex(32)
-    logger.warning("SESSION_SECRET not set; using generated secret (sessions won't persist across restarts)")
-
-# Use HTTPS-only cookies when in production (Cloud Run is always HTTPS)
-https_only = os.environ.get("HTTPS_ONLY", "false").lower() == "true"
-
-app.add_middleware(
-    SessionMiddleware,
-    secret_key=session_secret,
-    session_cookie="mha_session",
-    same_site="lax",
-    https_only=https_only,
 )
 
 # CORS middleware
@@ -242,162 +241,175 @@ class PatientInfo(BaseModel):
     member_id: str
 
 
-class LoginRequest(BaseModel):
-    username: str
-    password: str
+# ============================================================================
+# Authorization Helpers
+# ============================================================================
+
+async def require_patient_access(user: FirebaseUser, patient_id: int) -> None:
+    """
+    Check if user has access to the specified patient.
+
+    Args:
+        user: Authenticated Firebase user
+        patient_id: Patient ID to check access for
+
+    Raises:
+        HTTPException 403 if access denied
+    """
+    has_access = await check_patient_access(user.uid, patient_id)
+    if not has_access:
+        logger.warning(f"AUTHZ_DENIED uid={user.uid} patient_id={patient_id}")
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "FORBIDDEN",
+                "message": "Not authorized for requested patient.",
+                "patient_id": str(patient_id),
+            }
+        )
+    logger.info(f"AUTHZ_ALLOWED uid={user.uid} patient_id={patient_id}")
 
 
 # ============================================================================
-# Auth Endpoints
+# Auth Endpoints (Firebase only)
 # ============================================================================
 
-@app.post("/api/auth/login")
-async def login(request: Request, login_request: LoginRequest):
-    """Authenticate user and create session."""
-    username = login_request.username.strip().lower()
-    password = login_request.password.strip()
+@app.get("/api/whoami")
+async def whoami(request: Request, user: FirebaseUser = Depends(require_firebase_auth)):
+    """
+    Get current Firebase-authenticated user identity.
 
-    # Validate username
-    if username not in VALID_USERS:
-        return JSONResponse(
-            status_code=401,
-            content={"error": "invalid_credentials", "message": "Invalid username or password"}
-        )
+    Requires valid Firebase ID token in Authorization header.
+    Returns deterministic JSON with user identity.
+    """
+    # Get allowed patient IDs for this user
+    allowed_patients = await get_allowed_patient_ids(user.uid)
 
-    # Validate password is non-empty
-    if not password:
-        return JSONResponse(
-            status_code=401,
-            content={"error": "invalid_credentials", "message": "Password is required"}
-        )
-
-    # Set session
-    request.session["sub"] = username
-    logger.info(f"User '{username}' logged in")
-
-    return {"sub": username}
-
-
-@app.post("/api/auth/logout")
-async def logout(request: Request):
-    """Clear session and log out."""
-    sub = request.session.get("sub")
-    request.session.clear()
-    if sub:
-        logger.info(f"User '{sub}' logged out")
-    return {"ok": True}
-
-
-@app.get("/api/auth/me")
-async def get_current_user(request: Request):
-    """Get current authenticated user info."""
-    sub = request.session.get("sub")
-
-    if not sub:
-        return {"authenticated": False}
-
-    # Get allowed patient IDs from config
-    authz_config = config.get("authz", {})
-    user_patient_map = authz_config.get("user_patient_map", {})
-    allowed_patient_id = user_patient_map.get(sub)
-
-    # Return as list for consistency
-    allowed_patient_ids = [allowed_patient_id] if allowed_patient_id else []
+    # Log successful auth decision
+    log_auth_decision(
+        path=request.url.path,
+        uid=user.uid,
+        decision="allow",
+    )
 
     return {
-        "authenticated": True,
-        "sub": sub,
-        "allowed_patient_ids": allowed_patient_ids,
+        "uid": user.uid,
+        "email": user.email,
+        "email_verified": user.email_verified,
+        "allowed_patient_ids": allowed_patients,
+        "claims": user.claims,
     }
 
 
 # ============================================================================
-# API Endpoints
+# API Endpoints (Protected with Firebase Auth)
 # ============================================================================
 
 @app.get("/api/health")
 async def health_check():
-    """Health check endpoint."""
+    """Health check endpoint (public)."""
+    mcp_connected = mcp_client is not None and mcp_client.is_connected
     return {
         "status": "healthy",
-        "mcp_connected": mcp_client is not None,
+        "mcp_connected": mcp_connected,
         "agent_ready": agent is not None,
     }
 
 
 @app.get("/api/patients", response_model=list[PatientInfo])
-async def list_patients(request: Request):
-    """Get list of patients for selector dropdown."""
-    # Ensure MCP connection (auto-reconnect if needed)
-    client, _ = await ensure_mcp_connected()
+async def list_patients(user: FirebaseUser = Depends(require_firebase_auth)):
+    """
+    Get list of patients the authenticated user can access.
 
-    # Extract auth context from request
-    auth = get_auth_context(request)
+    Requires Firebase authentication. Returns only patients the user is authorized for.
+    This endpoint does NOT require MCP - it reads directly from the patient database.
+    """
+    # Get allowed patient IDs for this user
+    allowed_patient_ids = await get_allowed_patient_ids(user.uid)
+
+    logger.info(f"PATIENT_LIST uid={user.uid} allowed_ids={allowed_patient_ids}")
+
+    if not allowed_patient_ids:
+        logger.info(f"PATIENT_LIST no_patient_access uid={user.uid}")
+        return []
 
     try:
-        result = await client.call_tool("list_patients", {}, auth=auth)
-        # Parse the result
-        content = result.get("content", [])
-        if content and content[0].get("type") == "text":
-            import json
-            data = json.loads(content[0]["text"])
-            return data.get("patients", [])
-        return []
+        # Query patient database directly (no MCP dependency)
+        patients = await get_patients_by_ids(allowed_patient_ids)
+        logger.info(f"PATIENT_LIST returned_count={len(patients)}")
+        return patients
     except Exception as e:
-        # Check if this is a connection error - invalidate client for next request
-        if is_connection_error(e):
-            invalidate_mcp_connection()
-            raise HTTPException(status_code=503, detail="MCP connection lost. Please retry.")
-        logger.error(f"Error listing patients: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to list patients: {type(e).__name__}: {str(e)}")
+        logger.error(f"PATIENT_LIST error uid={user.uid}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load patients.")
 
 
 @app.get("/api/patients/{patient_id}")
-async def get_patient(request: Request, patient_id: int):
-    """Get patient details."""
-    # Ensure MCP connection (auto-reconnect if needed)
-    client, _ = await ensure_mcp_connected()
+async def get_patient(patient_id: int, user: FirebaseUser = Depends(require_firebase_auth)):
+    """
+    Get patient details.
 
-    # Extract auth context from request
-    auth = get_auth_context(request)
+    Requires Firebase authentication and authorization for the specific patient.
+    This endpoint does NOT require MCP - it reads directly from the patient database.
+    """
+    # Check patient access
+    await require_patient_access(user, patient_id)
 
     try:
-        result = await client.call_tool("get_patient_demographics", {"patient_id": patient_id}, auth=auth)
-        content = result.get("content", [])
-        if content and content[0].get("type") == "text":
-            import json
-            return json.loads(content[0]["text"])
-        raise HTTPException(status_code=404, detail="Patient not found")
+        # Query patient database directly (no MCP dependency)
+        patient = await get_patient_from_db(patient_id)
+        if not patient:
+            raise HTTPException(status_code=404, detail="Patient not found")
+        return {"patient": patient}
     except HTTPException:
         raise
     except Exception as e:
-        # Check if this is a connection error - invalidate client for next request
-        if is_connection_error(e):
-            invalidate_mcp_connection()
-            raise HTTPException(status_code=503, detail="MCP connection lost. Please retry.")
-        logger.error(f"Error getting patient: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to get patient: {type(e).__name__}: {str(e)}")
+        logger.error(f"PATIENT_GET error patient_id={patient_id} uid={user.uid}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get patient details.")
 
 
 @app.post("/api/chat", response_model=ChatResponse)
-async def chat(request: Request, chat_request: ChatRequest):
-    """Process a chat message through the Claude agent."""
-    # Ensure MCP connection (auto-reconnect if needed)
-    _, chat_agent = await ensure_mcp_connected()
+async def chat(chat_request: ChatRequest, user: FirebaseUser = Depends(require_firebase_auth)):
+    """
+    Process a chat message through the Claude agent.
 
-    # Extract auth context from request
-    auth = get_auth_context(request)
+    Requires Firebase authentication and authorization for the requested patient.
+    """
+    logger.info(f"CHAT_REQUEST received uid={user.uid} patient_id={chat_request.patient_id} message_len={len(chat_request.message)}")
+
+    # Check patient access before any tool calls
+    await require_patient_access(user, chat_request.patient_id)
+
+    # Ensure MCP connection (auto-reconnect if needed)
+    logger.info(f"CHAT_ENSURE_CONNECTED start uid={user.uid}")
+    try:
+        client, chat_agent = await ensure_mcp_connected()
+        mcp_ready = client is not None and client.is_connected
+        logger.info(f"CHAT_ENSURE_CONNECTED end mcp_ready={mcp_ready} uid={user.uid}")
+    except HTTPException as e:
+        logger.error(f"CHAT_ENSURE_CONNECTED failed uid={user.uid} status={e.status_code} detail={e.detail}")
+        raise
+
+    logger.info(f"CHAT_MCP_READY ready={mcp_ready} uid={user.uid} patient_id={chat_request.patient_id}")
 
     debug_logger = get_debug_logger()
     debug_logger.log_agent_reasoning({
         "action": "chat_request",
         "patient_id": chat_request.patient_id,
         "message_preview": chat_request.message[:100],
-        "request_id": auth.request_id,
-        "sub": auth.sub,
+        "uid": user.uid,
+        "mcp_ready": mcp_ready,
     })
 
     try:
+        # Create a simple auth context for MCP tools (using UID now)
+        from backend.auth_context import AuthContext
+        import uuid
+        auth = AuthContext(
+            sub=user.uid,
+            request_id=str(uuid.uuid4()),
+            actor_type="human",
+        )
+
         result = await chat_agent.chat(
             message=chat_request.message,
             patient_id=chat_request.patient_id,
@@ -406,13 +418,31 @@ async def chat(request: Request, chat_request: ChatRequest):
             auth=auth,
         )
         return ChatResponse(**result)
+    except MCPConnectionError as e:
+        logger.error(f"CHAT_MCP_ERROR uid={user.uid} error={e}")
+        invalidate_mcp_connection()
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "MCP_UNAVAILABLE",
+                "message": "MCP server not connected",
+                "reason": "mcp_disconnected",
+            }
+        )
     except Exception as e:
-        # Check if this is a connection error - invalidate client for next request
         if is_connection_error(e):
+            logger.error(f"CHAT_MCP_ERROR uid={user.uid} error={e}")
             invalidate_mcp_connection()
-            raise HTTPException(status_code=503, detail="MCP connection lost. Please retry.")
-        logger.error(f"Chat error: {e}")
-        debug_logger.log_error({"error": str(e), "type": "chat_error", "request_id": auth.request_id})
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "MCP_UNAVAILABLE",
+                    "message": "MCP server not connected",
+                    "reason": "mcp_disconnected",
+                }
+            )
+        logger.error(f"CHAT_ERROR uid={user.uid} error={e}")
+        debug_logger.log_error({"error": str(e), "type": "chat_error", "uid": user.uid})
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -457,6 +487,37 @@ async def get_debug_config():
         },
         "security": config.get("security", {}),
         "logging": config.get("logging", {}),
+    }
+
+
+@app.get("/api/access")
+async def get_current_user_access(user: FirebaseUser = Depends(require_firebase_auth)):
+    """
+    Get the current user's UID and allowed patient IDs.
+
+    This is a quick debug endpoint to check authorization mapping.
+    """
+    allowed = await get_allowed_patient_ids(user.uid)
+    logger.info(f"ACCESS_CHECK uid={user.uid} allowed_patient_ids={allowed}")
+    return {
+        "uid": user.uid,
+        "allowed_patient_ids": allowed,
+    }
+
+
+@app.get("/api/debug/patient-access")
+async def get_patient_access_list(user: FirebaseUser = Depends(require_firebase_auth)):
+    """
+    Debug endpoint to view all patient access mappings.
+    Returns current user's UID and their allowed patients, plus all mappings.
+    """
+    from backend.patient_access import list_all_access
+    all_access = await list_all_access()
+    allowed = await get_allowed_patient_ids(user.uid)
+    return {
+        "current_uid": user.uid,
+        "allowed_patient_ids": allowed,
+        "all_mappings": all_access,
     }
 
 

@@ -22,7 +22,14 @@
       "Bash(curl:*)",
       "Bash(source:*)",
       "Bash(grep:*)",
-      "Bash(pip install:*)"
+      "Bash(pip install:*)",
+      "Bash(node --check:*)",
+      "Bash(pip show:*)",
+      "Bash(/Users/paulivanivsky/Engineering/claudecode/healthcare-mcp-demo-v2/venv/bin/python:*)",
+      "Bash(/Users/paulivanivsky/Engineering/claudecode/healthcare-mcp-demo-v2/venv/bin/pip index versions:*)",
+      "Bash(/Users/paulivanivsky/Engineering/claudecode/healthcare-mcp-demo-v2/venv/bin/pip install anthropic==)",
+      "Bash(/Users/paulivanivsky/Engineering/claudecode/healthcare-mcp-demo-v2/venv/bin/pip install:*)",
+      "Bash(/Users/paulivanivsky/Engineering/claudecode/healthcare-mcp-demo-v2/venv/bin/pip show mcp pydantic)"
     ]
   }
 }
