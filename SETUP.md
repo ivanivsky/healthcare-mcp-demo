@@ -29,18 +29,34 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 3. Set your Anthropic API key
+### 3. Set required environment variables
 
 ```bash
 # On macOS/Linux:
 export ANTHROPIC_API_KEY="your-api-key-here"
+export FIREBASE_API_KEY="your-firebase-api-key"
+export FIREBASE_AUTH_DOMAIN="your-project.firebaseapp.com"
+export FIREBASE_PROJECT_ID="your-project-id"
 
 # On Windows (PowerShell):
 $env:ANTHROPIC_API_KEY="your-api-key-here"
+$env:FIREBASE_API_KEY="your-firebase-api-key"
+$env:FIREBASE_AUTH_DOMAIN="your-project.firebaseapp.com"
+$env:FIREBASE_PROJECT_ID="your-project-id"
 
 # On Windows (Command Prompt):
 set ANTHROPIC_API_KEY=your-api-key-here
+set FIREBASE_API_KEY=your-firebase-api-key
+set FIREBASE_AUTH_DOMAIN=your-project.firebaseapp.com
+set FIREBASE_PROJECT_ID=your-project-id
 ```
+
+**Getting Firebase credentials:**
+1. Go to [Firebase Console](https://console.firebase.google.com)
+2. Select your project (or create one)
+3. Go to Project Settings > General
+4. Under "Your apps", find your web app or create one
+5. Copy the `apiKey` and `authDomain` from the config snippet
 
 ### 4. Initialize the database with sample data
 

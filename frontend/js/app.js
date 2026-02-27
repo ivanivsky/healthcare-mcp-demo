@@ -3,19 +3,11 @@
  * Firebase Authentication Only
  */
 
-// Firebase Configuration
-const firebaseConfig = {
-    apiKey: "AIzaSyC9IgURwS2nCxnou6QwW--x07DRTaG63ZY",
-    authDomain: "healthcare-demo-app.firebaseapp.com",
-};
-
-// Initialize Firebase
-firebase.initializeApp(firebaseConfig);
-
 // State
 let currentPatient = null;
 let conversationHistory = [];
 let currentUser = null;
+let firebaseInitialized = false;
 
 // DOM Elements
 const loginContainer = document.getElementById('loginContainer');
@@ -63,7 +55,59 @@ async function fetchWithFirebaseAuth(url, options = {}) {
 // Initialization
 // ============================================================================
 
-document.addEventListener('DOMContentLoaded', () => {
+/**
+ * Load Firebase config from backend and initialize Firebase SDK.
+ */
+async function initializeFirebase() {
+    try {
+        const response = await fetch(`${API_BASE}/api/config`);
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail?.message || error.message || 'Failed to load config');
+        }
+
+        const config = await response.json();
+        if (!config.firebase || !config.firebase.apiKey) {
+            throw new Error('Invalid Firebase config received');
+        }
+
+        firebase.initializeApp(config.firebase);
+        firebaseInitialized = true;
+        console.log('Firebase initialized successfully');
+        return true;
+    } catch (error) {
+        console.error('Failed to initialize Firebase:', error);
+        showConfigError(error.message);
+        return false;
+    }
+}
+
+/**
+ * Show configuration error on the login card.
+ */
+function showConfigError(message) {
+    const loginError = document.getElementById('loginError');
+    if (loginError) {
+        loginError.textContent = `Configuration error: ${message}`;
+        loginError.style.display = 'block';
+    }
+    // Disable the sign-in button
+    const googleSignInBtn = document.getElementById('googleSignInBtn');
+    if (googleSignInBtn) {
+        googleSignInBtn.disabled = true;
+        googleSignInBtn.style.opacity = '0.5';
+    }
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+    // Load Firebase config and initialize
+    const initialized = await initializeFirebase();
+    if (!initialized) {
+        // Show login UI with error state
+        showLoginUI();
+        return;
+    }
+
     // Bind whoami button click handlers
     const whoamiBtn = document.getElementById('whoamiBtn');
     if (whoamiBtn) {
@@ -96,7 +140,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // Listen for Firebase auth state changes
+    // Listen for Firebase auth state changes (only after Firebase is initialized)
     firebase.auth().onAuthStateChanged(async (user) => {
         if (user) {
             // User is signed in with Firebase

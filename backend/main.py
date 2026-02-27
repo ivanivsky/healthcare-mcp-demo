@@ -305,6 +305,39 @@ async def whoami(request: Request, user: FirebaseUser = Depends(require_firebase
 # API Endpoints (Protected with Firebase Auth)
 # ============================================================================
 
+@app.get("/api/config")
+async def get_frontend_config():
+    """
+    Get frontend configuration (public).
+
+    Returns Firebase config from environment variables.
+    Required for frontend to initialize Firebase SDK.
+    """
+    api_key = os.environ.get("FIREBASE_API_KEY")
+    auth_domain = os.environ.get("FIREBASE_AUTH_DOMAIN")
+    project_id = os.environ.get("FIREBASE_PROJECT_ID")
+
+    if not api_key or not auth_domain:
+        logger.error("CONFIG_MISSING: FIREBASE_API_KEY or FIREBASE_AUTH_DOMAIN not set")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "CONFIG_MISSING",
+                "message": "Firebase config missing. Set FIREBASE_API_KEY and FIREBASE_AUTH_DOMAIN.",
+            }
+        )
+
+    firebase_config = {
+        "apiKey": api_key,
+        "authDomain": auth_domain,
+    }
+
+    if project_id:
+        firebase_config["projectId"] = project_id
+
+    return {"firebase": firebase_config}
+
+
 @app.get("/api/health")
 async def health_check():
     """Health check endpoint (public)."""
