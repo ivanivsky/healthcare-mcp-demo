@@ -3,11 +3,100 @@
  * Firebase Authentication Only
  */
 
+console.log("BOOT: app.js loaded");
+
+// Firebase config - loaded from /api/config
+let firebaseConfig = null;
+
+/**
+ * Fetch Firebase config from backend and initialize Firebase.
+ * Called once on page load.
+ */
+async function initializeFirebase() {
+    console.log("CONFIG: fetching /api/config...");
+
+    try {
+        const response = await fetch('/api/config');
+        const data = await response.json();
+
+        if (!response.ok) {
+            // Backend returned error (e.g., missing env vars)
+            console.error("CONFIG: failed", response.status, data);
+            showConfigError(data.missing || ['FIREBASE_API_KEY', 'FIREBASE_AUTH_DOMAIN']);
+            return false;
+        }
+
+        if (!data.firebase || !data.firebase.apiKey || !data.firebase.authDomain) {
+            console.error("CONFIG: invalid response", data);
+            showConfigError(['FIREBASE_API_KEY', 'FIREBASE_AUTH_DOMAIN']);
+            return false;
+        }
+
+        firebaseConfig = data.firebase;
+        console.log("CONFIG: loaded ok", { authDomain: firebaseConfig.authDomain });
+
+        // Initialize Firebase with guards
+        console.log("BOOT: firebase present?", !!window.firebase);
+        if (!window.firebase) {
+            throw new Error("Firebase SDK not loaded - check that firebase-app.js and firebase-auth.js loaded before app.js");
+        }
+
+        console.log("BOOT: firebase apps:", firebase.apps ? firebase.apps.length : "n/a");
+        if (!firebase.apps || firebase.apps.length === 0) {
+            firebase.initializeApp(firebaseConfig);
+            console.log("BOOT: firebase.initializeApp() called");
+        } else {
+            console.log("BOOT: firebase already initialized, skipping");
+        }
+
+        return true;
+    } catch (error) {
+        console.error("CONFIG: fetch error", error);
+        showConfigError(['FIREBASE_API_KEY', 'FIREBASE_AUTH_DOMAIN']);
+        return false;
+    }
+}
+
+/**
+ * Show config error on the login card.
+ */
+function showConfigError(missingVars) {
+    const loginCard = document.querySelector('.login-card');
+    if (!loginCard) return;
+
+    // Hide the sign-in button
+    const signInBtn = document.getElementById('googleSignInBtn');
+    if (signInBtn) {
+        signInBtn.style.display = 'none';
+    }
+
+    // Show error message
+    const errorDiv = document.createElement('div');
+    errorDiv.className = 'config-error';
+    errorDiv.innerHTML = `
+        <p><strong>Configuration Error</strong></p>
+        <p>Missing: ${missingVars.join(', ')}</p>
+        <p>See backend terminal for details.</p>
+        <code style="font-size: 11px; display: block; margin-top: 8px; color: #666;">
+            export FIREBASE_API_KEY="..."<br>
+            export FIREBASE_AUTH_DOMAIN="..."
+        </code>
+    `;
+    errorDiv.style.cssText = 'background: #fee; border: 1px solid #c00; padding: 12px; border-radius: 8px; margin: 16px 0; text-align: left;';
+
+    // Insert before login error div
+    const loginError = document.getElementById('loginError');
+    if (loginError) {
+        loginCard.insertBefore(errorDiv, loginError);
+    } else {
+        loginCard.appendChild(errorDiv);
+    }
+}
+
 // State
 let currentPatient = null;
 let conversationHistory = [];
 let currentUser = null;
-let firebaseInitialized = false;
 
 // DOM Elements
 const loginContainer = document.getElementById('loginContainer');
@@ -55,57 +144,12 @@ async function fetchWithFirebaseAuth(url, options = {}) {
 // Initialization
 // ============================================================================
 
-/**
- * Load Firebase config from backend and initialize Firebase SDK.
- */
-async function initializeFirebase() {
-    try {
-        const response = await fetch(`${API_BASE}/api/config`);
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.detail?.message || error.message || 'Failed to load config');
-        }
-
-        const config = await response.json();
-        if (!config.firebase || !config.firebase.apiKey) {
-            throw new Error('Invalid Firebase config received');
-        }
-
-        firebase.initializeApp(config.firebase);
-        firebaseInitialized = true;
-        console.log('Firebase initialized successfully');
-        return true;
-    } catch (error) {
-        console.error('Failed to initialize Firebase:', error);
-        showConfigError(error.message);
-        return false;
-    }
-}
-
-/**
- * Show configuration error on the login card.
- */
-function showConfigError(message) {
-    const loginError = document.getElementById('loginError');
-    if (loginError) {
-        loginError.textContent = `Configuration error: ${message}`;
-        loginError.style.display = 'block';
-    }
-    // Disable the sign-in button
-    const googleSignInBtn = document.getElementById('googleSignInBtn');
-    if (googleSignInBtn) {
-        googleSignInBtn.disabled = true;
-        googleSignInBtn.style.opacity = '0.5';
-    }
-}
-
 document.addEventListener('DOMContentLoaded', async () => {
-    // Load Firebase config and initialize
-    const initialized = await initializeFirebase();
-    if (!initialized) {
-        // Show login UI with error state
-        showLoginUI();
-        return;
+    // Initialize Firebase from /api/config (called exactly once)
+    const firebaseReady = await initializeFirebase();
+    if (!firebaseReady) {
+        console.log("BOOT: Firebase init failed, stopping");
+        return; // Config error already displayed
     }
 
     // Bind whoami button click handlers
@@ -140,7 +184,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
 
-    // Listen for Firebase auth state changes (only after Firebase is initialized)
+    // Listen for Firebase auth state changes
     firebase.auth().onAuthStateChanged(async (user) => {
         if (user) {
             // User is signed in with Firebase

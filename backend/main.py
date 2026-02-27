@@ -172,6 +172,19 @@ async def lifespan(app: FastAPI):
     else:
         logger.warning("Firebase authentication not available (missing credentials)")
 
+    # Log Firebase frontend config status (without exposing actual keys)
+    fb_api_key = os.environ.get("FIREBASE_API_KEY")
+    fb_auth_domain = os.environ.get("FIREBASE_AUTH_DOMAIN")
+    if fb_api_key and fb_auth_domain:
+        logger.info(f"FIREBASE_CONFIG: ready (apiKey={fb_api_key[:8]}..., authDomain={fb_auth_domain})")
+    else:
+        missing = []
+        if not fb_api_key:
+            missing.append("FIREBASE_API_KEY")
+        if not fb_auth_domain:
+            missing.append("FIREBASE_AUTH_DOMAIN")
+        logger.warning(f"FIREBASE_CONFIG: missing [{', '.join(missing)}] - frontend will show config error")
+
     # Initialize patient access database
     await init_patient_access_db()
     await seed_patient_access()
@@ -311,19 +324,27 @@ async def get_frontend_config():
     Get frontend configuration (public).
 
     Returns Firebase config from environment variables.
-    Required for frontend to initialize Firebase SDK.
+    Frontend calls this once on load to initialize Firebase SDK.
     """
     api_key = os.environ.get("FIREBASE_API_KEY")
     auth_domain = os.environ.get("FIREBASE_AUTH_DOMAIN")
     project_id = os.environ.get("FIREBASE_PROJECT_ID")
 
-    if not api_key or not auth_domain:
-        logger.error("CONFIG_MISSING: FIREBASE_API_KEY or FIREBASE_AUTH_DOMAIN not set")
-        raise HTTPException(
+    # Check what's missing
+    missing = []
+    if not api_key:
+        missing.append("FIREBASE_API_KEY")
+    if not auth_domain:
+        missing.append("FIREBASE_AUTH_DOMAIN")
+
+    if missing:
+        logger.error(f"CONFIG_MISSING: {', '.join(missing)} not set")
+        return JSONResponse(
             status_code=500,
-            detail={
+            content={
                 "error": "CONFIG_MISSING",
-                "message": "Firebase config missing. Set FIREBASE_API_KEY and FIREBASE_AUTH_DOMAIN.",
+                "missing": missing,
+                "how_to_fix": "export FIREBASE_API_KEY='your-key'; export FIREBASE_AUTH_DOMAIN='your-project.firebaseapp.com'",
             }
         )
 

@@ -31,24 +31,26 @@ pip install -r requirements.txt
 
 ### 3. Set required environment variables
 
+**Option A: Use a .env file (recommended)**
+
+```bash
+# Copy the example file
+cp .env.example .env
+
+# Edit .env with your actual values:
+# ANTHROPIC_API_KEY=sk-ant-api03-...
+# FIREBASE_API_KEY=AIzaSyC...
+# FIREBASE_AUTH_DOMAIN=your-project.firebaseapp.com
+```
+
+**Option B: Export directly**
+
 ```bash
 # On macOS/Linux:
-export ANTHROPIC_API_KEY="your-api-key-here"
-export FIREBASE_API_KEY="your-firebase-api-key"
+export ANTHROPIC_API_KEY="sk-ant-api03-..."
+export FIREBASE_API_KEY="AIzaSyC..."
 export FIREBASE_AUTH_DOMAIN="your-project.firebaseapp.com"
-export FIREBASE_PROJECT_ID="your-project-id"
-
-# On Windows (PowerShell):
-$env:ANTHROPIC_API_KEY="your-api-key-here"
-$env:FIREBASE_API_KEY="your-firebase-api-key"
-$env:FIREBASE_AUTH_DOMAIN="your-project.firebaseapp.com"
-$env:FIREBASE_PROJECT_ID="your-project-id"
-
-# On Windows (Command Prompt):
-set ANTHROPIC_API_KEY=your-api-key-here
-set FIREBASE_API_KEY=your-firebase-api-key
-set FIREBASE_AUTH_DOMAIN=your-project.firebaseapp.com
-set FIREBASE_PROJECT_ID=your-project-id
+export FIREBASE_PROJECT_ID="your-project-id"  # optional
 ```
 
 **Getting Firebase credentials:**
@@ -57,6 +59,17 @@ set FIREBASE_PROJECT_ID=your-project-id
 3. Go to Project Settings > General
 4. Under "Your apps", find your web app or create one
 5. Copy the `apiKey` and `authDomain` from the config snippet
+
+**Verify config is set correctly:**
+When the backend starts, you should see:
+```
+FIREBASE_CONFIG: ready (apiKey=AIzaSyC..., authDomain=your-project.firebaseapp.com)
+```
+
+If config is missing, you'll see:
+```
+FIREBASE_CONFIG: missing [FIREBASE_API_KEY, FIREBASE_AUTH_DOMAIN] - frontend will show config error
+```
 
 ### 4. Initialize the database with sample data
 
@@ -78,6 +91,15 @@ The MCP server will start on port 8001 with endpoints:
 - Health check: `http://localhost:8001/health`
 
 ### 6. Start the Backend API (Terminal 2)
+
+**Quick start with run.sh:**
+
+```bash
+# Loads .env automatically and starts backend
+./run.sh
+```
+
+**Or manually:**
 
 ```bash
 python -m backend.main
