@@ -16,6 +16,8 @@ from typing import Optional
 
 import yaml
 from mcp.server.fastmcp import FastMCP
+from dotenv import load_dotenv
+load_dotenv()
 
 # Add project root to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -34,6 +36,8 @@ from mcp_server.policy import (
     is_authz_enabled,
     authorize_patient_access,
     log_authz_decision,
+    is_mcp_transport_auth_required,
+    extract_auth_context,
 )
 
 # Load configuration
@@ -68,7 +72,7 @@ mcp = FastMCP(
 def check_patient_authorization(
     tool_name: str,
     patient_id: int,
-    auth_context: dict | None,
+    raw_auth_context: dict | None,
 ) -> dict | None:
     """
     Check if the caller is authorized to access a patient's data.
@@ -76,11 +80,30 @@ def check_patient_authorization(
     Args:
         tool_name: Name of the tool being called
         patient_id: Patient ID being accessed
-        auth_context: Auth context dict with 'sub' and 'request_id'
+        raw_auth_context: Raw auth context dict (may contain signed JWT token)
 
     Returns:
         None if authorized, error dict if denied
     """
+    # Extract and verify auth_context (handles JWT verification if required)
+    auth_context = extract_auth_context(raw_auth_context)
+
+    # If signing is required but verification failed, deny
+    if auth_context is None and raw_auth_context is not None:
+        log_authz_decision(
+            tool=tool_name,
+            patient_id=patient_id,
+            sub=None,
+            request_id=None,
+            decision="deny",
+            reason="auth_context_verification_failed",
+        )
+        return {
+            "error": "forbidden",
+            "message": "Invalid or missing auth context signature",
+            "request_id": None,
+        }
+
     # Skip authorization if disabled
     if not is_authz_enabled():
         log_authz_decision(
@@ -113,8 +136,8 @@ def check_patient_authorization(
             "request_id": request_id,
         }
 
-    # Check patient access
-    if not authorize_patient_access(sub, patient_id):
+    # Check patient access using claims from auth_context
+    if not authorize_patient_access(patient_id, auth_context):
         log_authz_decision(
             tool=tool_name,
             patient_id=patient_id,
@@ -149,11 +172,26 @@ async def list_patients(auth_context: dict | None = None) -> dict:
     """
     List patients the authenticated user is authorized to access.
     Returns basic info for patient selection dropdown.
+
+    Authorization is derived from auth_context claims:
+    - admin role: returns all patients
+    - other roles: returns only patients in patient_ids list
     """
+    # Extract and verify auth_context (handles JWT verification if required)
+    raw_auth_context = auth_context
+    auth_context = extract_auth_context(raw_auth_context)
+
+    # If signing is required but verification failed, return empty list
+    if auth_context is None and raw_auth_context is not None:
+        logger.warning("list_patients: auth_context verification failed")
+        return {"patients": [], "count": 0, "error": "auth_context_verification_failed"}
+
     sub = auth_context.get("sub") if auth_context else None
     request_id = auth_context.get("request_id") if auth_context else None
+    role = auth_context.get("role", "patient") if auth_context else "patient"
+    patient_ids = auth_context.get("patient_ids", []) if auth_context else []
 
-    logger.info(f"Tool called: list_patients (sub={sub}, request_id={request_id})")
+    logger.info(f"Tool called: list_patients (sub={sub}, role={role}, patient_ids={patient_ids}, request_id={request_id})")
 
     # If authz is disabled, return all patients
     if not is_authz_enabled():
@@ -186,60 +224,62 @@ async def list_patients(auth_context: dict | None = None) -> dict:
             "count": 0
         }
 
-    # Get the patient ID this user is authorized to access
-    from mcp_server.policy import get_allowed_patient_id
-    allowed_patient_id = get_allowed_patient_id(sub)
-
-    if allowed_patient_id is None:
-        # User has no patient mapping - return empty list
+    # Admin role: return all patients
+    if role == "admin":
+        patients = await get_all_patients()
         log_authz_decision(
             tool="list_patients",
             patient_id=None,
             sub=sub,
             request_id=request_id,
-            decision="deny",
-            reason="no_patient_mapping",
+            decision="allow",
+            reason="admin_role",
+        )
+        return {
+            "patients": patients,
+            "count": len(patients)
+        }
+
+    # Non-admin: return only patients from claims
+    if not patient_ids:
+        log_authz_decision(
+            tool="list_patients",
+            patient_id=None,
+            sub=sub,
+            request_id=request_id,
+            decision="allow",
+            reason="no_patient_ids_in_claims",
         )
         return {
             "patients": [],
             "count": 0
         }
 
-    # Fetch only the authorized patient
-    patient = await get_patient_by_id(allowed_patient_id)
-    if patient:
-        # Return only basic info needed for dropdown
-        filtered_patient = {
-            "id": patient["id"],
-            "first_name": patient["first_name"],
-            "last_name": patient["last_name"],
-            "member_id": patient["member_id"],
-        }
-        log_authz_decision(
-            tool="list_patients",
-            patient_id=allowed_patient_id,
-            sub=sub,
-            request_id=request_id,
-            decision="allow",
-        )
-        return {
-            "patients": [filtered_patient],
-            "count": 1
-        }
-    else:
-        # Authorized patient doesn't exist
-        log_authz_decision(
-            tool="list_patients",
-            patient_id=allowed_patient_id,
-            sub=sub,
-            request_id=request_id,
-            decision="allow",
-            reason="patient_not_found",
-        )
-        return {
-            "patients": [],
-            "count": 0
-        }
+    # Fetch each authorized patient
+    patients = []
+    for pid in patient_ids:
+        patient = await get_patient_by_id(pid)
+        if patient:
+            # Return only basic info needed for dropdown
+            patients.append({
+                "id": patient["id"],
+                "first_name": patient["first_name"],
+                "last_name": patient["last_name"],
+                "member_id": patient["member_id"],
+            })
+
+    log_authz_decision(
+        tool="list_patients",
+        patient_id=None,
+        sub=sub,
+        request_id=request_id,
+        decision="allow",
+        reason=f"claims_based_access ({len(patients)} patients)",
+    )
+    return {
+        "patients": patients,
+        "count": len(patients)
+    }
 
 
 @mcp.tool()
@@ -424,7 +464,33 @@ def run_sse_server(host: str, port: int):
     sse_transport = SseServerTransport("/messages/")
 
     async def handle_sse(request):
-        """Handle SSE connection requests."""
+        """Handle SSE connection requests with optional bearer token verification."""
+        # Verify bearer token if transport auth is required
+        if is_mcp_transport_auth_required():
+            expected = os.environ.get("MCP_INTERNAL_TOKEN")
+            auth_header = request.headers.get("Authorization", "")
+
+            if not expected:
+                logger.error(
+                    "MCP_INTERNAL_TOKEN not set but "
+                    "mcp_transport_auth_required is enabled"
+                )
+                return Response(status_code=500)
+
+            if auth_header != f"Bearer {expected}":
+                logger.warning(
+                    "MCP_TRANSPORT_AUTH DENY "
+                    "reason=invalid_or_missing_bearer_token"
+                )
+                return Response(status_code=401)
+
+            logger.debug("MCP_TRANSPORT_AUTH success")
+        else:
+            logger.warning(
+                "MCP_TRANSPORT_AUTH DISABLED — accepting connection without "
+                "bearer token verification. This is an insecure configuration."
+            )
+
         async with sse_transport.connect_sse(
             request.scope, request.receive, request._send
         ) as streams:

@@ -1,18 +1,25 @@
 """
 MCP Client for Health Advisor.
 Connects to the MCP server and provides tool access.
+
+Includes security controls:
+- Bearer token authentication for MCP transport
+- JWT signing for auth_context integrity
 """
 
 import asyncio
 import logging
+import os
+import time
 from typing import Any, Optional
 from contextlib import asynccontextmanager
 
+import jwt
 from mcp import ClientSession
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client, StdioServerParameters
 
-from backend.config import get_config
+from backend.config import get_config, is_security_control_enabled
 from backend.auth_context import AuthContext
 
 logger = logging.getLogger("mcp_client")
@@ -159,11 +166,28 @@ class MCPClient:
         self._connected = False
 
     async def _connect_sse(self):
-        """Connect via SSE transport."""
+        """Connect via SSE transport with optional bearer token authentication."""
         logger.info(f"MCP_SSE_CONNECT start url={self.server_url}")
 
-        # Create SSE client context manager
-        self._context_manager = sse_client(self.server_url)
+        # Conditionally add bearer token for transport authentication
+        headers = {}
+        if is_security_control_enabled("mcp_transport_auth_required"):
+            token = os.environ.get("MCP_INTERNAL_TOKEN")
+            if not token:
+                raise RuntimeError(
+                    "MCP_INTERNAL_TOKEN is required when "
+                    "mcp_transport_auth_required is enabled"
+                )
+            headers["Authorization"] = f"Bearer {token}"
+            logger.info("MCP_SSE_CONNECT transport_auth=enabled")
+        else:
+            logger.warning(
+                "MCP_TRANSPORT_AUTH DISABLED — connecting without bearer token. "
+                "This is an insecure configuration."
+            )
+
+        # Create SSE client context manager with optional headers
+        self._context_manager = sse_client(self.server_url, headers=headers)
         logger.info(f"MCP_SSE_CONNECT sse_client created, entering context...")
 
         # Enter the context manager to get streams
@@ -287,13 +311,47 @@ class MCPClient:
         logger.info(f"MCP_TOOL_CALL tool={name} request_id={log_context['request_id']}")
 
         # Inject auth_context into arguments for server-side authorization
+        # Includes full authorization data from verified Firebase claims
         # Do not overwrite if already present (defense in depth)
         call_arguments = dict(arguments)
         if "auth_context" not in call_arguments and auth is not None:
-            call_arguments["auth_context"] = {
-                "sub": auth.sub,
-                "request_id": auth.request_id,
-            }
+            if is_security_control_enabled("mcp_auth_context_signing_required"):
+                # Sign the claims so the MCP server can verify they came from us
+                secret = os.environ.get("MCP_JWT_SECRET")
+                if not secret:
+                    raise RuntimeError(
+                        "MCP_JWT_SECRET is required when "
+                        "mcp_auth_context_signing_required is enabled"
+                    )
+                token = jwt.encode(
+                    {
+                        "sub": auth.sub,
+                        "request_id": auth.request_id,
+                        "role": auth.role,
+                        "patient_ids": auth.patient_ids,
+                        "actor_type": auth.actor_type,
+                        "iat": int(time.time()),
+                        "exp": int(time.time()) + 60,  # 60 second TTL
+                    },
+                    secret,
+                    algorithm="HS256",
+                )
+                call_arguments["auth_context"] = {"token": token}
+                logger.debug(f"MCP_AUTH_CONTEXT signed JWT for sub={auth.sub}")
+            else:
+                # Unsigned plain dict — MCP server trusts it without verification
+                # This is the insecure state used for demonstration
+                logger.warning(
+                    "MCP_AUTH_CONTEXT_SIGNING DISABLED — sending unsigned claims. "
+                    f"sub={auth.sub} This is an insecure configuration."
+                )
+                call_arguments["auth_context"] = {
+                    "sub": auth.sub,
+                    "request_id": auth.request_id,
+                    "role": auth.role,
+                    "patient_ids": auth.patient_ids,
+                    "actor_type": auth.actor_type,
+                }
 
         # Try the call, with one retry on connection failure
         for attempt in range(2):

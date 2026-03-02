@@ -42,15 +42,35 @@ authz:
 
 # Security Controls (toggle for vulnerability demonstrations)
 security:
-  authentication:
-    enabled: false  # Will implement in security phase
-  input_validation:
-    level: "basic"  # Options: none, basic, strict
-  mcp_auth_required: false  # Require auth for MCP server
+  # Controls whether Firebase JWT verification is enforced.
+  # When false: all requests are treated as unauthenticated (no user context).
+  # Demonstrates: unauthenticated API access attack vector.
+  authentication_required: true
+
+  # Controls whether claims-based patient authorization is enforced.
+  # When false: all MCP tool calls pass through regardless of patient_ids.
+  # Demonstrates: broken object level authorization (BOLA) attack vector.
+  # Note: this maps to the existing authz.enabled toggle in mcp_server/policy.py
+  authorization_required: true
+
+  # Controls whether the MCP server requires a bearer token from the backend.
+  # When false: anything that can reach the MCP port can call tools directly.
+  # Demonstrates: lack of service-to-service authentication.
+  mcp_transport_auth_required: true
+
+  # Controls whether auth_context is sent as a signed JWT.
+  # When false: auth_context is a plain dict the MCP server trusts without verification.
+  # Demonstrates: lack of message integrity / claim forgery attack vector.
+  mcp_auth_context_signing_required: true
+
+  # Controls whether user input is scanned for prompt injection patterns.
+  # When false: raw user input is sent directly to Claude without scanning.
+  # Demonstrates: prompt injection attack vector.
   prompt_injection_protection: true
-  data_filtering: true  # Filter sensitive data in responses
+
+  # Rate limiting configuration.
   rate_limiting:
-    enabled: false
+    enabled: true
     requests_per_minute: 60
 
 # Logging & Observability

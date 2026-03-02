@@ -1,9 +1,16 @@
 """
 Authorization policy for Health Advisor MCP Server.
-Enforces tool-level access control based on user-patient mappings.
+
+Enforces tool-level access control based on claims from the auth_context.
+Authorization is derived entirely from the verified JWT claims sent by the backend.
+No external lookup (YAML, database) is performed.
+
+Includes security controls for MCP transport authentication and auth_context
+signature verification.
 """
 
 import logging
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -28,6 +35,12 @@ def load_config() -> dict:
     return _config
 
 
+def get_security_config() -> dict:
+    """Get the security section of config."""
+    config = load_config()
+    return config.get("security", {})
+
+
 def get_authz_config() -> dict:
     """Get the authz section of config."""
     config = load_config()
@@ -35,49 +48,135 @@ def get_authz_config() -> dict:
 
 
 def is_authz_enabled() -> bool:
-    """Check if authorization is enabled."""
+    """
+    Check if authorization is enabled.
+
+    Now checks the security.authorization_required control first,
+    falling back to authz.enabled for backwards compatibility.
+    """
+    security = get_security_config()
+    if "authorization_required" in security:
+        return security.get("authorization_required", True)
+    # Fallback to legacy authz.enabled
     return get_authz_config().get("enabled", False)
 
 
-def get_allowed_patient_id(sub: str) -> Optional[int]:
+# ============================================================================
+# MCP Transport Security Controls
+# ============================================================================
+
+def is_mcp_transport_auth_required() -> bool:
     """
-    Get the patient ID that a user (sub) is allowed to access.
+    Check if MCP transport bearer token is required.
+
+    When true, the MCP server requires a valid bearer token in the
+    Authorization header for SSE connections.
+    """
+    return get_security_config().get("mcp_transport_auth_required", True)
+
+
+def is_auth_context_signing_required() -> bool:
+    """
+    Check if auth_context JWT signature verification is required.
+
+    When true, auth_context must contain a signed JWT token.
+    When false, auth_context is trusted as-is (insecure).
+    """
+    return get_security_config().get("mcp_auth_context_signing_required", True)
+
+
+def extract_auth_context(raw_auth_context: dict | None) -> dict | None:
+    """
+    Extract and verify auth_context from the raw dict passed by the backend.
+
+    When signing is required:
+      - raw_auth_context must contain a "token" key with a signed JWT
+      - Verifies signature and expiry using MCP_JWT_SECRET
+      - Returns the decoded claims dict on success
+      - Returns None if verification fails (caller should deny)
+
+    When signing is not required:
+      - raw_auth_context is used as-is (plain dict with sub, role, etc.)
+      - Logs a warning that unverified claims are being trusted
 
     Args:
-        sub: Subject identifier (user ID)
+        raw_auth_context: The auth_context dict from the tool call arguments
 
     Returns:
-        Patient ID if mapping exists, None otherwise (deny by default)
+        The normalized auth_context dict with sub, role, patient_ids, etc.
+        Returns None if verification fails or no context provided.
     """
-    authz_config = get_authz_config()
-    user_patient_map = authz_config.get("user_patient_map", {})
-    patient_id = user_patient_map.get(sub)
+    if not raw_auth_context:
+        return None
 
-    # Ensure it's an int if present
-    if patient_id is not None:
-        return int(patient_id)
-    return None
+    if is_auth_context_signing_required():
+        token = raw_auth_context.get("token")
+        if not token:
+            logger.warning(
+                "AUTH_CONTEXT_VERIFY failed: "
+                "signing required but no token present"
+            )
+            return None
+
+        secret = os.environ.get("MCP_JWT_SECRET")
+        if not secret:
+            logger.error(
+                "MCP_JWT_SECRET not set but "
+                "mcp_auth_context_signing_required is enabled"
+            )
+            return None
+
+        try:
+            import jwt
+            claims = jwt.decode(token, secret, algorithms=["HS256"])
+            logger.debug(
+                f"AUTH_CONTEXT_VERIFY success sub={claims.get('sub')} "
+                f"request_id={claims.get('request_id')}"
+            )
+            return claims
+        except jwt.ExpiredSignatureError:
+            logger.warning("AUTH_CONTEXT_VERIFY failed: token expired")
+            return None
+        except jwt.InvalidTokenError as e:
+            logger.warning(f"AUTH_CONTEXT_VERIFY failed: {e}")
+            return None
+    else:
+        # Signing disabled — trust the raw context as-is
+        logger.warning(
+            "AUTH_CONTEXT_SIGNING DISABLED — trusting unverified claims. "
+            f"sub={raw_auth_context.get('sub')} "
+            "This is an insecure configuration."
+        )
+        return raw_auth_context
 
 
-def authorize_patient_access(sub: str, patient_id: int) -> bool:
+def authorize_patient_access(
+    patient_id: int,
+    auth_context: dict,
+) -> bool:
     """
-    Check if a user is authorized to access a specific patient's data.
+    Check if the caller is authorized to access a specific patient.
+
+    Authorization is derived from the claims embedded in auth_context —
+    the same claims that were verified by Firebase on the backend.
+    No external lookup is performed.
 
     Args:
-        sub: Subject identifier (user ID)
-        patient_id: Patient ID being accessed
+        patient_id: The patient being accessed
+        auth_context: Dict containing role, patient_ids, sub, request_id
 
     Returns:
         True if authorized, False otherwise
     """
-    allowed_patient_id = get_allowed_patient_id(sub)
+    role = auth_context.get("role", "patient")
+    patient_ids = auth_context.get("patient_ids", [])
 
-    # Deny if no mapping exists for this user
-    if allowed_patient_id is None:
-        return False
+    # Admins can access any patient
+    if role == "admin":
+        return True
 
-    # Check if the requested patient matches the allowed patient
-    return allowed_patient_id == patient_id
+    # All other roles: check the patient_ids list from claims
+    return patient_id in patient_ids
 
 
 def log_authz_decision(
