@@ -17,6 +17,7 @@ mcp:
   transport: "sse"  # Options: stdio, sse, http
   host: "localhost"
   port: 8001
+  server_url: "http://localhost:8001/sse"  # Overridden by MCP_SERVER_URL env var in Cloud Run
 
 # Backend API Configuration
 backend:
@@ -41,12 +42,15 @@ database:
 
 # CORS Configuration
 # Note: Wildcard origins with credentials is invalid per CORS spec
+# Can be overridden by CORS_ORIGINS env var (comma-separated list)
 cors:
   allowed_origins:
     - "http://localhost:8080"
     - "http://localhost:3000"
-    # Add your Cloud Run URL here when deploying:
-    # - "https://your-app.run.app"
+    - "https://ai-wtf.xyz"
+    - "https://www.ai-wtf.xyz"
+    # Cloud Run URL added after deployment:
+    # - "https://your-service-xxxxx-uc.a.run.app"
 
 # Security Controls (toggle for vulnerability demonstrations)
 # Note: Authorization is now controlled via security.authorization_required below.

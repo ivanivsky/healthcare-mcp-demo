@@ -50,6 +50,17 @@ def load_config() -> dict[str, Any]:
     if os.environ.get("BACKEND_PORT"):
         config["backend"]["port"] = int(os.environ["BACKEND_PORT"])
 
+    # CORS configuration overrides
+    if "cors" not in config:
+        config["cors"] = {}
+    if os.environ.get("CORS_ORIGINS"):
+        # Comma-separated list of allowed origins
+        config["cors"]["allowed_origins"] = [
+            origin.strip()
+            for origin in os.environ["CORS_ORIGINS"].split(",")
+            if origin.strip()
+        ]
+
     return config
 
 

@@ -61,10 +61,13 @@ from backend.patient_db import (
 # Load config
 config = get_config()
 
-# Setup logging
-log_level = config.get("logging", {}).get("level", "INFO")
+# Debug mode from environment (default false for production safety)
+DEBUG_MODE = os.environ.get("DEBUG", "false").lower() == "true"
+
+# Setup logging - prefer LOG_LEVEL env var, fallback to config
+log_level = os.environ.get("LOG_LEVEL", config.get("logging", {}).get("level", "INFO")).upper()
 logging.basicConfig(
-    level=getattr(logging, log_level),
+    level=getattr(logging, log_level, logging.INFO),
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger("backend")
@@ -164,6 +167,7 @@ async def lifespan(app: FastAPI):
     global mcp_client, agent
 
     logger.info("Starting My Health Access backend...")
+    logger.info(f"DEBUG_MODE={DEBUG_MODE} LOG_LEVEL={log_level}")
 
     # Log SDK versions for debugging compatibility issues
     try:
@@ -172,6 +176,21 @@ async def lifespan(app: FastAPI):
         logger.info(f"SDK_VERSIONS anthropic={anthropic.__version__} httpx={httpx.__version__}")
     except Exception as e:
         logger.warning(f"Could not log SDK versions: {e}")
+
+    # Initialize and seed database on startup.
+    # On Cloud Run, containers are stateless so this runs every time.
+    # The seed data is idempotent — same patients, same data, every time.
+    try:
+        from mcp_server.database import init_database
+        from scripts.seed_database import main as seed_database_main
+        logger.info("Initializing patient database...")
+        await init_database()
+        logger.info("Seeding patient database...")
+        await seed_database_main()
+        logger.info("Patient database ready.")
+    except Exception as e:
+        logger.error(f"Database initialization failed: {e}")
+        raise
 
     # Initialize Firebase Admin SDK
     if init_firebase():
@@ -221,6 +240,7 @@ app = FastAPI(
     description="Backend API for My Health Access healthcare demo (Firebase Auth only)",
     version="2.0.0",
     lifespan=lifespan,
+    debug=DEBUG_MODE,
 )
 
 # CORS middleware
@@ -524,10 +544,18 @@ async def get_frontend_config():
 
 @app.get("/api/health")
 async def health_check():
-    """Health check endpoint (public)."""
-    mcp_connected = mcp_client is not None and mcp_client.is_connected
+    """
+    Health check endpoint (public).
+
+    Used by Cloud Run to determine container readiness.
+    Returns 200 OK if the API process is healthy.
+    Does not depend on MCP connection — that's reported separately.
+    """
+    mcp_connected = mcp_client is not None and getattr(mcp_client, "is_connected", False)
     return {
         "status": "healthy",
+        "service": "health-advisor-api",
+        "version": "2.0.0",
         "mcp_connected": mcp_connected,
         "agent_ready": agent is not None,
     }
@@ -1611,12 +1639,13 @@ if __name__ == "__main__":
     import uvicorn
 
     # Support environment variable overrides for Cloud Run
-    host = os.environ.get("BACKEND_HOST", config.get("backend", {}).get("host", "localhost"))
-    port = int(os.environ.get("BACKEND_PORT", config.get("backend", {}).get("port", 8080)))
+    # PORT is the standard Cloud Run env var
+    host = os.environ.get("BACKEND_HOST", "0.0.0.0")
+    port = int(os.environ.get("PORT", os.environ.get("BACKEND_PORT", 8080)))
 
     uvicorn.run(
         "backend.main:app",
         host=host,
         port=port,
-        reload=False,
+        reload=DEBUG_MODE,
     )
