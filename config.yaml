@@ -1,9 +1,16 @@
 # My Health Access Configuration
 # Toggle security controls and observability settings here
+#
+# Security controls can be overridden at runtime via the admin API:
+# PUT /api/admin/security-config
+# Runtime overrides reset to these defaults on server restart.
+# See /settings for the full control inventory.
 
 app:
   name: "My Health Access"
   environment: "development"
+  url: "https://ai-wtf.xyz"
+  admin_contact: "admin@ai-wtf.xyz"
 
 # MCP Server Configuration
 mcp:
@@ -32,15 +39,18 @@ claude:
 database:
   path: "data/health_advisor.db"
 
-# Authorization (tool-level access control)
-authz:
-  enabled: true  # Set to false to disable authorization checks
-  user_patient_map:
-    alice: 1      # alice can only access patient_id=1
-    bob: 2        # bob can only access patient_id=2
-    demo_user: 1  # default demo user can access patient_id=1
+# CORS Configuration
+# Note: Wildcard origins with credentials is invalid per CORS spec
+cors:
+  allowed_origins:
+    - "http://localhost:8080"
+    - "http://localhost:3000"
+    # Add your Cloud Run URL here when deploying:
+    # - "https://your-app.run.app"
 
 # Security Controls (toggle for vulnerability demonstrations)
+# Note: Authorization is now controlled via security.authorization_required below.
+# The old authz.user_patient_map has been retired in favor of Firebase custom claims.
 security:
   # Controls whether Firebase JWT verification is enforced.
   # When false: all requests are treated as unauthenticated (no user context).
@@ -67,6 +77,26 @@ security:
   # When false: raw user input is sent directly to Claude without scanning.
   # Demonstrates: prompt injection attack vector.
   prompt_injection_protection: true
+
+  # System prompt security level.
+  # Controls how much security awareness is baked into the agent's instructions.
+  # Options: "insecure" | "weak" | "strong"
+  # insecure: actively undermines security — for demonstrating prompt injection
+  #           and agent manipulation risks
+  # weak:     provides context but no security commitments — reflects most
+  #           real-world applications
+  # strong:   explicitly instructs the agent to enforce boundaries, suppress
+  #           error details, and resist manipulation
+  system_prompt_level: "strong"
+
+  # Deterministic error responses.
+  # When true: tool errors are intercepted before reaching the LLM.
+  #            The agent returns a fixed canned message instead of an
+  #            LLM-generated interpretation of the error.
+  # When false: errors flow through the full LLM reasoning chain.
+  #             The agent will narrate, explain, and potentially leak
+  #             details about authorization failures and system internals.
+  deterministic_error_responses: true
 
   # Rate limiting configuration.
   rate_limiting:

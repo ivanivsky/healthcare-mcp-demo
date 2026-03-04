@@ -55,6 +55,7 @@ from backend.firebase_auth import (
 from backend.patient_db import (
     get_patients_by_ids,
     get_patient_by_id as get_patient_from_db,
+    get_all_patients,
 )
 
 # Load config
@@ -224,12 +225,17 @@ app = FastAPI(
 
 # CORS middleware
 if config.get("backend", {}).get("cors_enabled", True):
+    # Load allowed origins from config (wildcard + credentials is invalid per CORS spec)
+    cors_origins = config.get("cors", {}).get(
+        "allowed_origins",
+        ["http://localhost:8080", "http://localhost:3000"]
+    )
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],  # In production, specify exact origins
+        allow_origins=cors_origins,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type"],
     )
 
 # Firebase Auth middleware - validates JWT on all protected routes
@@ -283,6 +289,8 @@ class SecurityConfigUpdate(BaseModel):
     mcp_transport_auth_required: bool | None = None
     mcp_auth_context_signing_required: bool | None = None
     prompt_injection_protection: bool | None = None
+    system_prompt_level: str | None = None      
+    deterministic_error_responses: bool | None = None
 
 
 class SecurityConfigResponse(BaseModel):
@@ -381,6 +389,91 @@ async def whoami(
         "role": auth.role,
         "patient_ids": auth.patient_ids,
         "actor_type": auth.actor_type,
+    }
+
+
+@app.post("/api/auth/bootstrap")
+async def bootstrap_user(
+    user: FirebaseUser = Depends(get_current_user),
+):
+    """
+    Bootstrap a new user with default claims.
+
+    Called by the frontend immediately after sign-in when the user has no
+    custom claims. Assigns a random patient_id and the 'patient' role.
+
+    This is idempotent — calling it multiple times for a user who already
+    has claims will not overwrite them.
+
+    Returns:
+        bootstrapped: true if new claims were assigned, false if user already had claims
+        role: the user's role
+        patient_ids: the user's assigned patient IDs
+        patient_name: the assigned patient's name (only if bootstrapped=true)
+    """
+    import random
+
+    # Check if user already has claims
+    try:
+        existing_user = firebase_admin_auth.get_user(user.uid)
+        existing_claims = existing_user.custom_claims or {}
+
+        if existing_claims.get("role"):
+            # User already has claims — return without modifying
+            logger.info(
+                f"USER_BOOTSTRAP skip uid={user.uid} email={user.email} "
+                f"reason=already_has_claims role={existing_claims.get('role')}"
+            )
+            return {
+                "bootstrapped": False,
+                "message": "User already has claims",
+                "role": existing_claims.get("role"),
+                "patient_ids": existing_claims.get("patient_ids", []),
+            }
+    except Exception as e:
+        logger.error(f"USER_BOOTSTRAP error checking claims uid={user.uid}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "INTERNAL_ERROR", "message": "Failed to check user claims."}
+        )
+
+    # New user — assign random patient and 'patient' role
+    patient_id = random.randint(1, 5)
+    new_claims = {
+        "role": "patient",
+        "patient_ids": [patient_id],
+        "actor_type": "human",
+    }
+
+    try:
+        firebase_admin_auth.set_custom_user_claims(user.uid, new_claims)
+    except Exception as e:
+        logger.error(f"USER_BOOTSTRAP error setting claims uid={user.uid}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "INTERNAL_ERROR", "message": "Failed to set user claims."}
+        )
+
+    # Fetch patient name for the welcome modal
+    patient_name = "a demo patient"
+    try:
+        patient = await get_patient_from_db(patient_id)
+        if patient:
+            patient_name = f"{patient.get('first_name', '')} {patient.get('last_name', '')}".strip()
+    except Exception as e:
+        logger.warning(f"USER_BOOTSTRAP could not fetch patient name: {e}")
+
+    logger.info(
+        f"USER_BOOTSTRAP uid={user.uid} email={user.email} "
+        f"assigned_patient_id={patient_id}"
+    )
+
+    return {
+        "bootstrapped": True,
+        "role": "patient",
+        "patient_ids": [patient_id],
+        "patient_name": patient_name,
+        "message": "Access granted",
     }
 
 
@@ -491,7 +584,6 @@ async def get_patient(patient_id: int, auth: AuthContext = Depends(get_auth_cont
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(
     chat_request: ChatRequest,
-    user: FirebaseUser = Depends(get_current_user),
     auth: AuthContext = Depends(get_auth_context),
 ):
     """
@@ -806,6 +898,292 @@ async def set_user_claims(
     }
 
 
+@app.get("/api/admin/users")
+async def lookup_user_by_email(
+    email: str,
+    admin: AuthContext = Depends(require_admin_role),
+):
+    """
+    Look up a Firebase user by email address.
+
+    Requires admin role.
+
+    Args:
+        email: Email address to search for
+
+    Returns:
+        User info including uid, email, and current claims
+
+    Raises:
+        404 if no user exists with the given email
+    """
+    try:
+        user = firebase_admin_auth.get_user_by_email(email)
+    except firebase_admin_auth.UserNotFoundError:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "USER_NOT_FOUND",
+                "message": f"No user found with email: {email}",
+            }
+        )
+    except Exception as e:
+        logger.error(f"ADMIN_LOOKUP_USER error email={email} admin_sub={admin.sub}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "INTERNAL_ERROR",
+                "message": "Failed to look up user.",
+            }
+        )
+
+    claims = user.custom_claims or {}
+
+    logger.info(
+        f"ADMIN_LOOKUP_USER admin_sub={admin.sub} email={email} "
+        f"found_uid={user.uid} role={claims.get('role')}"
+    )
+
+    return {
+        "uid": user.uid,
+        "email": user.email,
+        "claims": {
+            "role": claims.get("role"),
+            "patient_ids": claims.get("patient_ids", []),
+            "actor_type": claims.get("actor_type"),
+        },
+    }
+
+
+class UpdateRoleRequest(BaseModel):
+    """Request body for updating user role."""
+    role: str
+
+    @validator("role")
+    def role_must_be_valid(cls, v):
+        valid = {"patient", "caregiver", "clinician", "admin"}
+        if v not in valid:
+            raise ValueError(f"role must be one of {valid}")
+        return v
+
+
+class UpdatePatientsRequest(BaseModel):
+    """Request body for updating user patient access."""
+    patient_ids: list[int]
+
+
+@app.put("/api/admin/users/{uid}/role")
+async def update_user_role(
+    uid: str,
+    body: UpdateRoleRequest,
+    admin: AuthContext = Depends(require_admin_role),
+):
+    """
+    Update only the role claim for a Firebase user.
+
+    Preserves existing patient_ids and actor_type claims.
+    Requires admin role.
+
+    Args:
+        uid: Firebase UID of the target user
+        body: UpdateRoleRequest with new role
+
+    Returns:
+        Updated claims
+    """
+    try:
+        user = firebase_admin_auth.get_user(uid)
+    except firebase_admin_auth.UserNotFoundError:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "USER_NOT_FOUND",
+                "message": f"No user found with UID: {uid}",
+            }
+        )
+    except Exception as e:
+        logger.error(f"ADMIN_UPDATE_ROLE lookup error uid={uid} admin_sub={admin.sub}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "INTERNAL_ERROR",
+                "message": "Failed to retrieve user.",
+            }
+        )
+
+    # Preserve existing claims, update role
+    existing_claims = user.custom_claims or {}
+    new_claims = {
+        "role": body.role,
+        "patient_ids": existing_claims.get("patient_ids", []),
+        "actor_type": existing_claims.get("actor_type", "human"),
+    }
+
+    try:
+        firebase_admin_auth.set_custom_user_claims(uid, new_claims)
+    except Exception as e:
+        logger.error(f"ADMIN_UPDATE_ROLE error uid={uid} admin_sub={admin.sub}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "INTERNAL_ERROR",
+                "message": "Failed to update role.",
+            }
+        )
+
+    logger.info(
+        f"ADMIN_UPDATE_ROLE admin_sub={admin.sub} target_uid={uid} "
+        f"old_role={existing_claims.get('role')} new_role={body.role}"
+    )
+
+    return {
+        "uid": uid,
+        "email": user.email,
+        "claims": new_claims,
+        "message": "Role updated. User must sign out and sign back in for changes to take effect.",
+    }
+
+
+@app.put("/api/admin/users/{uid}/patients")
+async def update_user_patients(
+    uid: str,
+    body: UpdatePatientsRequest,
+    admin: AuthContext = Depends(require_admin_role),
+):
+    """
+    Update only the patient_ids claim for a Firebase user.
+
+    Preserves existing role and actor_type claims.
+    Requires admin role.
+
+    Args:
+        uid: Firebase UID of the target user
+        body: UpdatePatientsRequest with new patient_ids list
+
+    Returns:
+        Updated claims
+    """
+    try:
+        user = firebase_admin_auth.get_user(uid)
+    except firebase_admin_auth.UserNotFoundError:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "USER_NOT_FOUND",
+                "message": f"No user found with UID: {uid}",
+            }
+        )
+    except Exception as e:
+        logger.error(f"ADMIN_UPDATE_PATIENTS lookup error uid={uid} admin_sub={admin.sub}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "INTERNAL_ERROR",
+                "message": "Failed to retrieve user.",
+            }
+        )
+
+    # Preserve existing claims, update patient_ids
+    existing_claims = user.custom_claims or {}
+    new_claims = {
+        "role": existing_claims.get("role", "patient"),
+        "patient_ids": body.patient_ids,
+        "actor_type": existing_claims.get("actor_type", "human"),
+    }
+
+    try:
+        firebase_admin_auth.set_custom_user_claims(uid, new_claims)
+    except Exception as e:
+        logger.error(f"ADMIN_UPDATE_PATIENTS error uid={uid} admin_sub={admin.sub}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "INTERNAL_ERROR",
+                "message": "Failed to update patient access.",
+            }
+        )
+
+    logger.info(
+        f"ADMIN_UPDATE_PATIENTS admin_sub={admin.sub} target_uid={uid} "
+        f"old_patient_ids={existing_claims.get('patient_ids')} new_patient_ids={body.patient_ids}"
+    )
+
+    return {
+        "uid": uid,
+        "email": user.email,
+        "claims": new_claims,
+        "message": "Patient access updated. User must sign out and sign back in for changes to take effect.",
+    }
+
+
+@app.delete("/api/admin/users/{uid}/claims")
+async def clear_user_claims(
+    uid: str,
+    admin: AuthContext = Depends(require_admin_role),
+):
+    """
+    Clear all custom claims for a Firebase user.
+
+    This resets the user to an unclaimed state. They will go through
+    the bootstrap flow on next sign-in.
+    Requires admin role.
+
+    Args:
+        uid: Firebase UID of the target user
+
+    Returns:
+        Confirmation of cleared claims
+    """
+    try:
+        user = firebase_admin_auth.get_user(uid)
+    except firebase_admin_auth.UserNotFoundError:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "USER_NOT_FOUND",
+                "message": f"No user found with UID: {uid}",
+            }
+        )
+    except Exception as e:
+        logger.error(f"ADMIN_CLEAR_CLAIMS lookup error uid={uid} admin_sub={admin.sub}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "INTERNAL_ERROR",
+                "message": "Failed to retrieve user.",
+            }
+        )
+
+    # Store old claims for logging
+    old_claims = user.custom_claims or {}
+
+    # Clear claims by setting to empty dict
+    try:
+        firebase_admin_auth.set_custom_user_claims(uid, {})
+    except Exception as e:
+        logger.error(f"ADMIN_CLEAR_CLAIMS error uid={uid} admin_sub={admin.sub}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "INTERNAL_ERROR",
+                "message": "Failed to clear claims.",
+            }
+        )
+
+    logger.warning(
+        f"ADMIN_CLEAR_CLAIMS admin_sub={admin.sub} target_uid={uid} "
+        f"email={user.email} cleared_role={old_claims.get('role')} "
+        f"cleared_patient_ids={old_claims.get('patient_ids')}"
+    )
+
+    return {
+        "uid": uid,
+        "email": user.email,
+        "claims": {},
+        "message": "Claims cleared. User will go through bootstrap on next sign-in.",
+    }
+
+
 # ============================================================================
 # Security Config Endpoints (Require admin role)
 # ============================================================================
@@ -876,6 +1254,8 @@ async def update_security_config_endpoint(
         "mcp_transport_auth_required",
         "mcp_auth_context_signing_required",
         "prompt_injection_protection",
+        "system_prompt_level",
+        "deterministic_error_responses"
     ]:
         value = getattr(body, field)
         if value is not None:
@@ -912,6 +1292,217 @@ async def reset_security_config_endpoint(
     new_config = reset_security_config()
 
     return _build_security_response(new_config)
+
+
+# ============================================================================
+# Demo Endpoints (Security Control Demonstration)
+# ============================================================================
+#
+# These endpoints demonstrate the authentication_required security control.
+# They do NOT use standard auth dependencies. Instead, they check the toggle
+# themselves and decide whether to require auth at the route level.
+#
+# This models a common real-world misconfiguration: a route added without
+# the authentication middleware dependency, or a dev shortcut that made
+# it to production.
+
+def demo_auth_check(request: Request) -> FirebaseUser | None:
+    """
+    Conditional auth check for demo endpoints.
+
+    When authentication_required is enabled: behaves like a normal
+    protected route — requires a valid Firebase token.
+    When authentication_required is disabled: skips auth entirely
+    and returns None, allowing unauthenticated access.
+
+    Logs the auth decision so it appears in the debug panel.
+    """
+    from backend.config import is_security_control_enabled
+
+    if is_security_control_enabled("authentication_required"):
+        # Auth is required — enforce it
+        auth = getattr(request.state, "auth", None)
+        user = getattr(request.state, "user", None)
+        if auth is None or user is None:
+            logger.warning(
+                f"DEMO_ENDPOINT DENY path={request.url.path} "
+                f"reason=authentication_required_enabled"
+            )
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "error": "AUTH_REQUIRED",
+                    "message": "Authentication required.",
+                    "reason": "authentication_required_enabled",
+                }
+            )
+        return user
+    else:
+        # Auth is disabled — log the insecure state and allow through
+        client_host = request.client.host if request.client else "unknown"
+        logger.warning(
+            f"DEMO_ENDPOINT ALLOW path={request.url.path} "
+            f"reason=authentication_required_disabled "
+            f"remote={client_host} "
+            "THIS IS AN INSECURE CONFIGURATION"
+        )
+        return None
+
+
+@app.get("/api/demo/status")
+async def demo_status():
+    """
+    Demo endpoint: Shows the current authentication state for demo endpoints.
+
+    Always public — no auth required. Use this to check whether the
+    authentication_required toggle is on or off.
+    """
+    from backend.config import is_security_control_enabled
+
+    auth_required = is_security_control_enabled("authentication_required")
+
+    return {
+        "demo_endpoints": {
+            "authentication_required": auth_required,
+            "base_url": "/api/demo",
+            "endpoints": [
+                "GET /api/demo/patients",
+                "GET /api/demo/patients/{patient_id}",
+                "GET /api/demo/status"
+            ],
+            "attack_demonstration": (
+                "When authentication_required is false, the patients endpoints "
+                "return PHI without any credentials. This demonstrates a common "
+                "misconfiguration where a route is deployed without proper "
+                "authentication middleware."
+            ),
+        }
+    }
+
+
+@app.get("/api/demo/patients")
+async def demo_list_patients(request: Request):
+    """
+    Demo endpoint: List all patients.
+
+    Behavior is controlled by the authentication_required security toggle:
+    - Toggle ON: requires Firebase authentication (same as /api/patients)
+    - Toggle OFF: returns all patients with no authentication required
+
+    This demonstrates the attack vector of an unprotected endpoint
+    leaking PHI. Use with the authentication_required toggle in /settings.
+    """
+    from backend.config import is_security_control_enabled
+
+    user = demo_auth_check(request)
+    auth_enforced = is_security_control_enabled("authentication_required")
+
+    if user is None:
+        # Auth disabled — return ALL patients (the attack scenario)
+        try:
+            patients = await get_all_patients()
+            response_data = {
+                "patients": patients,
+                "count": len(patients),
+                "auth_enforced": False,
+                "warning": "Authentication disabled — this endpoint is publicly accessible",
+            }
+            response = JSONResponse(content=response_data)
+            response.headers["X-Security-Warning"] = "Authentication disabled"
+            return response
+        except Exception as e:
+            logger.error(f"DEMO_LIST_PATIENTS error: {e}")
+            raise HTTPException(status_code=500, detail="Failed to load patients.")
+    else:
+        # Auth enabled — build AuthContext and return only authorized patients
+        auth = build_auth_context(user)
+        logger.info(f"DEMO_LIST_PATIENTS sub={auth.sub} role={auth.role} patient_ids={auth.patient_ids}")
+
+        if not auth.patient_ids:
+            return {
+                "patients": [],
+                "count": 0,
+                "auth_enforced": True,
+            }
+
+        try:
+            patients = await get_patients_by_ids(auth.patient_ids)
+            return {
+                "patients": patients,
+                "count": len(patients),
+                "auth_enforced": True,
+            }
+        except Exception as e:
+            logger.error(f"DEMO_LIST_PATIENTS error sub={auth.sub}: {e}")
+            raise HTTPException(status_code=500, detail="Failed to load patients.")
+
+
+@app.get("/api/demo/patients/{patient_id}")
+async def demo_get_patient(patient_id: int, request: Request):
+    """
+    Demo endpoint: Get a specific patient by ID.
+
+    Same authentication behavior as /api/demo/patients.
+    Toggle OFF: returns the patient record with no auth required.
+    Toggle ON: requires auth and checks patient access via claims.
+    """
+    from backend.config import is_security_control_enabled
+
+    user = demo_auth_check(request)
+    auth_enforced = is_security_control_enabled("authentication_required")
+
+    if user is None:
+        # Auth disabled — return the patient regardless of who is asking
+        try:
+            patient = await get_patient_from_db(patient_id)
+            if not patient:
+                raise HTTPException(status_code=404, detail="Patient not found")
+
+            response_data = {
+                "patient": patient,
+                "auth_enforced": False,
+                "warning": "Authentication disabled — this endpoint is publicly accessible",
+            }
+            response = JSONResponse(content=response_data)
+            response.headers["X-Security-Warning"] = "Authentication disabled"
+            return response
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"DEMO_GET_PATIENT error patient_id={patient_id}: {e}")
+            raise HTTPException(status_code=500, detail="Failed to get patient details.")
+    else:
+        # Auth enabled — check authorization via claims
+        auth = build_auth_context(user)
+
+        if not auth.can_access_patient(patient_id):
+            logger.warning(
+                f"DEMO_GET_PATIENT AUTHZ_DENIED sub={auth.sub} role={auth.role} "
+                f"patient_id={patient_id} patient_ids={auth.patient_ids}"
+            )
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "FORBIDDEN",
+                    "message": "Not authorized for requested patient.",
+                    "patient_id": str(patient_id),
+                }
+            )
+
+        try:
+            patient = await get_patient_from_db(patient_id)
+            if not patient:
+                raise HTTPException(status_code=404, detail="Patient not found")
+
+            return {
+                "patient": patient,
+                "auth_enforced": True,
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"DEMO_GET_PATIENT error patient_id={patient_id} sub={auth.sub}: {e}")
+            raise HTTPException(status_code=500, detail="Failed to get patient details.")
 
 
 # ============================================================================
@@ -952,6 +1543,64 @@ async def serve_debug():
         {"error": "Debug page not found. Place debug.html in frontend/"},
         status_code=404,
     )
+
+
+@app.get("/settings")
+async def serve_settings():
+    """Serve the settings page."""
+    settings_path = frontend_path / "settings.html"
+    if settings_path.exists():
+        return FileResponse(settings_path)
+    return JSONResponse(
+        {"error": "Settings page not found. Place settings.html in frontend/"},
+        status_code=404,
+    )
+
+
+@app.get("/learn")
+async def serve_learn():
+    """Serve the learn page (placeholder)."""
+    from fastapi.responses import HTMLResponse
+
+    html_content = """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Learn - My Health Access</title>
+    <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body>
+    <div class="learn-container">
+        <header class="learn-header">
+            <h1>Learn — Security Scenarios</h1>
+            <nav class="learn-header-nav">
+                <a href="/" class="nav-link">App</a>
+                <a href="/settings" class="nav-link">Settings</a>
+                <a href="/debug" class="nav-link">Debug</a>
+                <a href="/learn" class="nav-link nav-link-active">Learn</a>
+            </nav>
+        </header>
+        <main class="learn-content">
+            <div class="learn-card">
+                <div class="learn-icon">📚</div>
+                <h2>Coming Soon</h2>
+                <p>
+                    Security scenario walkthroughs are coming soon.
+                    This section will contain guided exercises for exploring
+                    authentication, authorization, prompt injection, and other
+                    AI security topics.
+                </p>
+                <div class="learn-links">
+                    <a href="/" class="learn-link">Back to App</a>
+                    <a href="/settings" class="learn-link">Security Settings</a>
+                </div>
+            </div>
+        </main>
+    </div>
+</body>
+</html>"""
+    return HTMLResponse(content=html_content)
 
 
 # ============================================================================

@@ -192,6 +192,10 @@ document.addEventListener('DOMContentLoaded', async () => {
                 currentUser = user.email || user.uid;
                 showAuthenticatedUI();
                 showWhoamiSection();
+
+                // Check if new user needs bootstrapping (before loading patients)
+                await checkAndBootstrap(user);
+
                 loadPatients();
                 checkHealth();
             } catch (error) {
@@ -292,6 +296,79 @@ async function handleGoogleSignIn() {
         }
     }
 }
+
+// ============================================================================
+// New User Bootstrap
+// ============================================================================
+
+/**
+ * Check if user needs bootstrapping (no claims) and call bootstrap endpoint.
+ * Shows welcome modal if user was newly bootstrapped.
+ */
+async function checkAndBootstrap(user) {
+    try {
+        // Get the ID token result which includes custom claims
+        const tokenResult = await user.getIdTokenResult();
+        const claims = tokenResult.claims;
+
+        // Check if user already has a role claim
+        if (claims.role) {
+            // Existing user with claims — nothing to do
+            console.log('[Bootstrap] User has existing claims, skipping');
+            return;
+        }
+
+        console.log('[Bootstrap] New user detected, calling bootstrap endpoint...');
+
+        // New user — call bootstrap endpoint
+        const token = await user.getIdToken();
+        const response = await fetch('/api/auth/bootstrap', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+
+        if (!response.ok) {
+            console.error('[Bootstrap] Failed:', response.status);
+            return;
+        }
+
+        const data = await response.json();
+        console.log('[Bootstrap] Response:', data);
+
+        if (data.bootstrapped) {
+            // Show welcome modal with patient info
+            showWelcomeModal(data.patient_name);
+        }
+
+    } catch (error) {
+        console.error('[Bootstrap] Error:', error);
+        // Don't block the user — just log the error
+    }
+}
+
+/**
+ * Show the welcome modal with the assigned patient's name.
+ */
+function showWelcomeModal(patientName) {
+    const messageEl = document.getElementById('welcomeMessage');
+    if (messageEl) {
+        messageEl.textContent =
+            `You've been given access to ${patientName}'s demo health record.`;
+    }
+    const modal = document.getElementById('welcomeModal');
+    if (modal) modal.style.display = 'flex';
+}
+
+/**
+ * Dismiss the welcome modal.
+ */
+function dismissWelcomeModal() {
+    const modal = document.getElementById('welcomeModal');
+    if (modal) modal.style.display = 'none';
+}
+
+// Make modal functions available globally
+window.dismissWelcomeModal = dismissWelcomeModal;
 
 function showWhoamiSection() {
     const whoamiSection = document.getElementById('whoamiSection');

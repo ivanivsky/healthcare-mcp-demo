@@ -26,6 +26,34 @@ def get_db_path() -> str:
     return str(project_root / DATABASE_PATH)
 
 
+async def get_all_patients() -> list[dict]:
+    """
+    Get all patients from the database.
+
+    WARNING: This function returns ALL patients without authorization checks.
+    Only use this for demo endpoints that explicitly handle auth themselves.
+
+    Returns:
+        List of patient dicts with id, first_name, last_name, member_id
+    """
+    db_path = get_db_path()
+
+    try:
+        async with aiosqlite.connect(db_path) as db:
+            db.row_factory = aiosqlite.Row
+            query = """
+                SELECT id, first_name, last_name, member_id, date_of_birth
+                FROM patients
+                ORDER BY last_name, first_name
+            """
+            async with db.execute(query) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
+    except Exception as e:
+        logger.error(f"PATIENT_DB error fetching all patients: {e}")
+        raise
+
+
 async def get_patients_by_ids(patient_ids: list[int]) -> list[dict]:
     """
     Get patient info for a list of patient IDs.

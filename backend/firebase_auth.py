@@ -56,11 +56,15 @@ PUBLIC_ROUTES = {
     "/api/health",
     "/api/debug/events",
     "/api/debug/config",
+    "/settings",
+    "/learn"
 }
 
-# Route prefixes that are always public (static files)
+# Route prefixes that are always public (static files, demo endpoints)
+# Demo endpoints handle their own auth based on the authentication_required toggle
 PUBLIC_PREFIXES = (
     "/static/",
+    "/api/demo/",
 )
 
 
@@ -454,18 +458,6 @@ class FirebaseAuthMiddleware(BaseHTTPMiddleware):
 
         # Public routes - no auth required
         if is_public_route(path):
-            request.state.user = None
-            request.state.auth = None
-            return await call_next(request)
-
-        # Check if authentication is disabled (insecure mode for demonstration)
-        if not is_security_control_enabled("authentication_required"):
-            logger.warning(
-                "AUTHENTICATION DISABLED — request proceeding without "
-                f"token verification. path={path} "
-                "This is an insecure configuration."
-            )
-            # Set empty user and auth context — no identity, no patient access
             request.state.user = None
             request.state.auth = None
             return await call_next(request)

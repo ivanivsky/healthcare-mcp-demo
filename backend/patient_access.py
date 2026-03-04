@@ -2,6 +2,14 @@
 Patient Access Control for My Health Access.
 
 Maps Firebase UIDs to allowed patient IDs using SQLite.
+
+NOTE: This module is NO LONGER used for authorization.
+Authorization is handled entirely via Firebase custom claims.
+See backend/firebase_auth.py and backend/auth_context.py.
+
+This file is retained as a potential admin utility for
+bootstrapping claim data. It is not imported by any active
+code path.
 """
 
 import logging

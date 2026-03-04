@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Settings - My Health Access</title>
+    <link rel="stylesheet" href="/static/css/styles.css">
+    <!-- Firebase SDK (v8 for vanilla JS) -->
+    <script src="https://www.gstatic.com/firebasejs/8.0.0/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.0.0/firebase-auth.js"></script>
+</head>
+<body>
+    <div class="settings-container">
+        <!-- Header -->
+        <header class="settings-header">
+            <h1>Security Settings</h1>
+            <nav class="settings-header-nav">
+                <span class="user-info" id="userInfo" style="display: none;">
+                    <span id="currentUser">--</span>
+                    <button class="logout-btn" onclick="handleLogout()">Sign Out</button>
+                </span>
+                <a href="/" class="nav-link">App</a>
+                <a href="/settings" class="nav-link nav-link-active">Settings</a>
+                <a href="/debug" class="nav-link">Debug</a>
+                <a href="/learn" class="nav-link nav-link-disabled" title="Coming soon">Learn</a>
+            </nav>
+        </header>
+
+        <!-- Loading State -->
+        <div class="settings-loading" id="settingsLoading">
+            <div class="loading-spinner"></div>
+            <p>Loading security configuration...</p>
+        </div>
+
+
+        <!-- Auth Required Message -->
+        <div class="auth-required" id="authRequired" style="display: none;">
+            <div class="auth-required-card">
+                <div class="auth-required-icon">🔐</div>
+                <h2>Authentication Required</h2>
+                <p>Please sign in to access settings.</p>
+                <a href="/" class="auth-required-link">Sign In</a>
+            </div>
+        </div>
+
+        <!-- Settings Content -->
+        <main class="settings-content" id="settingsContent" style="display: none;">
+            <!-- Read-Only Banner (shown for non-admin users) -->
+            <div class="readonly-banner" id="readonlyBanner" style="display: none;">
+                <span class="readonly-icon">👁</span>
+                <div class="readonly-text">
+                    <strong>Read-only mode</strong>
+                    <span>You are viewing security settings. Admin access is required to make changes.</span>
+                </div>
+            </div>
+
+            <!-- Security Posture Summary Bar -->
+            <div class="posture-summary" id="postureSummary">
+                <div class="posture-indicator" id="postureIndicator">
+                    <span class="posture-count" id="postureCount">-- of -- controls enabled</span>
+                </div>
+                <div class="posture-details" id="postureDetails">
+                    <span class="posture-disabled-label">Disabled:</span>
+                    <span class="posture-disabled-list" id="postureDisabledList">--</span>
+                </div>
+            </div>
+
+            <!-- Section 1: Identity & Access -->
+            <section class="settings-section">
+                <div class="section-header">
+                    <h2>Identity & Access</h2>
+                    <p class="section-description">Controls governing authentication and authorization at each layer of the system.</p>
+                </div>
+
+                <div class="control-card" id="card-authentication_required">
+                    <div class="control-header">
+                        <div class="control-title">Authentication Required</div>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="toggle-authentication_required" data-control="authentication_required">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    <div class="control-description">
+                        Controls authentication enforcement on demo endpoints (<code>/api/demo/*</code>). When ON: demo endpoints require a valid Firebase token. When OFF: demo endpoints return PHI with no credentials required — simulating a misconfigured unprotected route. The main application endpoints are always protected.
+                    </div>
+                    <div class="control-attack-vector">
+                        <span class="attack-label">Attack vector:</span> Unauthenticated API access
+                    </div>
+                    <div class="control-warning" id="warning-authentication_required">
+                        <span class="warning-icon">⚠️</span>
+                        <span>When disabled, patient data is accessible to anyone who can reach the server. Use only for demonstrations.</span>
+                    </div>
+                    <div class="control-demo-cmd" id="demo-authentication_required">
+                        <span class="demo-cmd-label">Try it:</span>
+                        <code id="demo-cmd-auth">curl http://localhost:8080/api/demo/patients</code>
+                    </div>
+                    <div class="control-status" id="status-authentication_required"></div>
+                </div>
+
+                <div class="control-card" id="card-authorization_required">
+                    <div class="control-header">
+                        <div class="control-title">Authorization Required</div>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="toggle-authorization_required" data-control="authorization_required">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    <div class="control-description">
+                        Enforces claims-based patient access at the MCP tool layer. When OFF: any authenticated user can access any patient's data.
+                    </div>
+                    <div class="control-attack-vector">
+                        <span class="attack-label">Attack vector:</span> Broken Object Level Authorization (BOLA)
+                    </div>
+                    <div class="control-status" id="status-authorization_required"></div>
+                </div>
+
+                <div class="control-card" id="card-mcp_transport_auth_required">
+                    <div class="control-header">
+                        <div class="control-title">MCP Transport Authentication</div>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="toggle-mcp_transport_auth_required" data-control="mcp_transport_auth_required">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    <div class="control-description">
+                        Requires a bearer token for backend-to-MCP connections. When OFF: the MCP server accepts connections from any caller that can reach its port.
+                    </div>
+                    <div class="control-attack-vector">
+                        <span class="attack-label">Attack vector:</span> Direct MCP access, bypassing backend auth
+                    </div>
+                    <div class="control-status" id="status-mcp_transport_auth_required"></div>
+                </div>
+
+                <div class="control-card" id="card-mcp_auth_context_signing_required">
+                    <div class="control-header">
+                        <div class="control-title">Auth Context Signing</div>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="toggle-mcp_auth_context_signing_required" data-control="mcp_auth_context_signing_required">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    <div class="control-description">
+                        Signs the auth context as a JWT so the MCP server can verify claims came from the trusted backend. When OFF: auth context is a plain dict that can be forged.
+                    </div>
+                    <div class="control-attack-vector">
+                        <span class="attack-label">Attack vector:</span> Claim forgery / identity spoofing
+                    </div>
+                    <div class="control-status" id="status-mcp_auth_context_signing_required"></div>
+                </div>
+            </section>
+
+            <!-- Section 2: Agent Behavior -->
+            <section class="settings-section">
+                <div class="section-header">
+                    <h2>Agent Behavior</h2>
+                    <p class="section-description">Controls governing how the AI agent processes requests and handles sensitive information.</p>
+                </div>
+
+                <div class="control-card control-card-radio" id="card-system_prompt_level">
+                    <div class="control-header">
+                        <div class="control-title">System Prompt Security Level</div>
+                    </div>
+                    <div class="control-description">
+                        Controls how much security awareness is embedded in the agent's instructions.
+                    </div>
+                    <div class="radio-group" id="radio-system_prompt_level">
+                        <label class="radio-option">
+                            <input type="radio" name="system_prompt_level" value="insecure">
+                            <span class="radio-label">Insecure</span>
+                            <span class="radio-description">Actively undermines security. Agent explains errors, considers requests to ignore instructions.</span>
+                        </label>
+                        <label class="radio-option">
+                            <input type="radio" name="system_prompt_level" value="weak">
+                            <span class="radio-label">Weak</span>
+                            <span class="radio-description">Basic context, no security commitments. Reflects most real-world applications.</span>
+                        </label>
+                        <label class="radio-option">
+                            <input type="radio" name="system_prompt_level" value="strong">
+                            <span class="radio-label">Strong</span>
+                            <span class="radio-description">Explicit patient binding, error suppression, manipulation resistance.</span>
+                        </label>
+                    </div>
+                    <div class="control-status" id="status-system_prompt_level"></div>
+                </div>
+
+                <div class="control-card" id="card-deterministic_error_responses">
+                    <div class="control-header">
+                        <div class="control-title">Deterministic Error Responses</div>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="toggle-deterministic_error_responses" data-control="deterministic_error_responses">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    <div class="control-description">
+                        Intercepts tool errors before they reach the LLM. When ON: auth failures return a fixed canned message. When OFF: the LLM narrates errors, potentially leaking details about the authorization model and system internals.
+                    </div>
+                    <div class="control-attack-vector">
+                        <span class="attack-label">Attack vector:</span> Information leakage via error narration
+                    </div>
+                    <div class="control-status" id="status-deterministic_error_responses"></div>
+                </div>
+
+                <div class="control-card control-card-coming-soon" id="card-prompt_injection_protection">
+                    <div class="control-header">
+                        <div class="control-title">Prompt Injection Protection</div>
+                        <span class="coming-soon-badge">Coming Soon</span>
+                    </div>
+                    <div class="control-description">
+                        Scans user input for injection patterns before sending to the agent. Coming in a future update.
+                    </div>
+                </div>
+            </section>
+
+            <!-- Section 3: Data Controls -->
+            <section class="settings-section">
+                <div class="section-header">
+                    <h2>Data Controls</h2>
+                    <p class="section-description">Controls governing what data the agent can access and return.</p>
+                </div>
+
+                <div class="control-card control-card-coming-soon">
+                    <div class="control-header">
+                        <div class="control-title">Data Minimization</div>
+                        <span class="coming-soon-badge">Coming Soon</span>
+                    </div>
+                    <div class="control-description">
+                        Filters responses to only include fields explicitly requested. Prevents over-permissioned data access.
+                    </div>
+                </div>
+
+                <div class="control-card control-card-coming-soon">
+                    <div class="control-header">
+                        <div class="control-title">Tool Scope Enforcement</div>
+                        <span class="coming-soon-badge">Coming Soon</span>
+                    </div>
+                    <div class="control-description">
+                        Restricts which MCP tools each role can call. e.g. caregiver: appointments only, not lab results.
+                    </div>
+                </div>
+            </section>
+
+            <!-- Section 4: Observability -->
+            <section class="settings-section">
+                <div class="section-header">
+                    <h2>Observability</h2>
+                    <p class="section-description">Controls governing logging, monitoring, and rate limiting.</p>
+                </div>
+
+                <div class="control-card control-card-coming-soon">
+                    <div class="control-header">
+                        <div class="control-title">Rate Limiting</div>
+                        <span class="coming-soon-badge">Coming Soon</span>
+                    </div>
+                    <div class="control-description">
+                        Limits requests per user per minute. When OFF: unlimited requests enable enumeration and abuse attacks.
+                    </div>
+                    <div class="control-attack-vector">
+                        <span class="attack-label">Attack vector:</span> Enumeration, credential stuffing, abuse
+                    </div>
+                </div>
+
+                <div class="control-card control-card-coming-soon">
+                    <div class="control-header">
+                        <div class="control-title">Audit Logging</div>
+                        <span class="coming-soon-badge">Coming Soon</span>
+                    </div>
+                    <div class="control-description">
+                        Structured logging of all auth decisions and data access. Coming in a future update.
+                    </div>
+                </div>
+            </section>
+
+            <!-- Section 5: User Management (Admin Only) -->
+            <section class="settings-section" id="userManagementSection">
+                <div class="section-header">
+                    <h2>User Management</h2>
+                    <p class="section-description">Look up users by email and manage their roles and patient access.</p>
+                </div>
+
+                <!-- User Search -->
+                <div class="control-card" id="card-user-search">
+                    <div class="control-header">
+                        <div class="control-title">Find User</div>
+                    </div>
+                    <div class="user-search-form">
+                        <input type="email" id="userSearchEmail" placeholder="user@example.com" class="user-search-input">
+                        <button type="button" id="userSearchBtn" onclick="lookupUser()">Look Up</button>
+                    </div>
+                    <div class="user-search-status" id="userSearchStatus"></div>
+                </div>
+
+                <!-- User Result Card (hidden until search) -->
+                <div class="control-card user-result-card" id="userResultCard" style="display: none;">
+                    <div class="control-header">
+                        <div class="control-title" id="userResultEmail">--</div>
+                        <span class="user-uid" id="userResultUid">UID: --</span>
+                    </div>
+
+                    <!-- Current Claims Display -->
+                    <div class="user-claims-display">
+                        <div class="claim-item">
+                            <span class="claim-label">Current Role:</span>
+                            <span class="claim-value" id="userCurrentRole">--</span>
+                        </div>
+                        <div class="claim-item">
+                            <span class="claim-label">Patient IDs:</span>
+                            <span class="claim-value" id="userCurrentPatients">--</span>
+                        </div>
+                    </div>
+
+                    <!-- Role Update -->
+                    <div class="user-update-section">
+                        <label class="user-update-label">Change Role:</label>
+                        <div class="user-update-row">
+                            <select id="userNewRole" class="user-role-select">
+                                <option value="patient">patient</option>
+                                <option value="caregiver">caregiver</option>
+                                <option value="clinician">clinician</option>
+                                <option value="admin">admin</option>
+                            </select>
+                            <button type="button" class="user-update-btn" onclick="updateUserRole()">Update Role</button>
+                        </div>
+                    </div>
+
+                    <!-- Patient IDs Update -->
+                    <div class="user-update-section">
+                        <label class="user-update-label">Change Patient Access:</label>
+                        <div class="user-update-row">
+                            <input type="text" id="userNewPatients" placeholder="1, 2, 3" class="user-patients-input">
+                            <button type="button" class="user-update-btn" onclick="updateUserPatients()">Update Patients</button>
+                        </div>
+                        <div class="user-update-hint">Enter comma-separated patient IDs (e.g., 1, 2, 3)</div>
+                    </div>
+
+                    <!-- Clear Claims -->
+                    <div class="user-danger-section">
+                        <button type="button" class="user-danger-btn" onclick="clearUserClaims()">Clear All Claims</button>
+                        <span class="user-danger-hint">User will re-bootstrap on next sign-in</span>
+                    </div>
+
+                    <div class="user-result-status" id="userResultStatus"></div>
+                </div>
+            </section>
+
+            <!-- Reset Button -->
+            <div class="settings-actions">
+                <button class="reset-btn" id="resetBtn" onclick="handleReset()">
+                    Reset to Defaults
+                </button>
+            </div>
+        </main>
+    </div>
+
+    <script src="/static/js/settings.js"></script>
+</body>
+</html>

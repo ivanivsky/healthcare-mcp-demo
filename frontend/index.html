@@ -19,7 +19,9 @@
                     <span id="currentUser">--</span>
                     <button class="logout-btn" onclick="handleLogout()">Sign Out</button>
                 </span>
-                <a href="/debug" target="_blank" class="debug-link">Debug View</a>
+                <a href="/settings" class="nav-link">Settings</a>
+                <a href="/debug" class="nav-link">Debug</a>
+                <a href="/learn" class="nav-link nav-link-disabled" title="Coming soon">Learn</a>
             </nav>
         </header>
 
@@ -140,6 +142,36 @@
         <div class="loading-overlay" id="loadingOverlay">
             <div class="loading-spinner"></div>
             <p>Processing your request...</p>
+        </div>
+    </div>
+
+    <!-- Welcome Modal (shown for new users after bootstrap) -->
+    <div class="modal-overlay" id="welcomeModal" style="display: none;">
+        <div class="modal-card">
+            <div class="modal-icon">👋</div>
+            <h2 class="modal-title">Welcome to My Health Access!</h2>
+            <p class="modal-body" id="welcomeMessage">
+                <!-- populated by JS -->
+            </p>
+            <div class="modal-steps">
+                <div class="modal-step">
+                    <span class="step-number">1</span>
+                    <span class="step-text">Click <strong>Sign Out</strong> in the top right</span>
+                </div>
+                <div class="modal-step">
+                    <span class="step-number">2</span>
+                    <span class="step-text">Sign back in with Google</span>
+                </div>
+                <div class="modal-step">
+                    <span class="step-number">3</span>
+                    <span class="step-text">Your access will be active</span>
+                </div>
+            </div>
+            <p class="modal-contact">
+                To get access to additional patients or to change your role, contact
+                <a href="mailto:admin@ai-wtf.xyz" class="modal-contact-link">admin@ai-wtf.xyz</a>
+            </p>
+            <button class="modal-btn" onclick="dismissWelcomeModal()">Got it</button>
         </div>
     </div>
 

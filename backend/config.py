@@ -109,12 +109,15 @@ def update_security_config(updates: dict) -> dict:
     global _runtime_security_overrides
 
     # Only update known security control keys (not nested objects like rate_limiting)
+    # Note: system_prompt_level is a string, not a bool, but can still be updated
     valid_controls = {
         "authentication_required",
         "authorization_required",
         "mcp_transport_auth_required",
         "mcp_auth_context_signing_required",
         "prompt_injection_protection",
+        "system_prompt_level",
+        "deterministic_error_responses",
     }
 
     for key, value in updates.items():
@@ -155,3 +158,19 @@ def is_security_control_enabled(control: str) -> bool:
     """
     security_config = get_security_config()
     return security_config.get(control, False)
+
+
+def get_system_prompt_level() -> str:
+    """
+    Get the current system prompt security level.
+
+    Returns:
+        "insecure" | "weak" | "strong"
+        Defaults to "strong" if not set or invalid.
+    """
+    security_config = get_security_config()
+    level = security_config.get("system_prompt_level", "strong")
+    if level not in ("insecure", "weak", "strong"):
+        logger.warning(f"Invalid system_prompt_level '{level}', defaulting to 'strong'")
+        return "strong"
+    return level
