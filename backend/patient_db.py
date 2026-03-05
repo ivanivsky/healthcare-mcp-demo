@@ -2,28 +2,15 @@
 Direct Patient Database Access for Backend API.
 
 Provides read-only access to patient data without MCP dependency.
-Uses the same SQLite database as the MCP server.
+Uses the shared PostgreSQL connection pool from backend.db.
 """
 
 import logging
-import os
-import aiosqlite
-from pathlib import Path
 from typing import Optional
 
+from backend import db
+
 logger = logging.getLogger("patient_db")
-
-# Database path - same as MCP server uses
-DATABASE_PATH = os.environ.get("DATABASE_PATH", "data/health_advisor.db")
-
-
-def get_db_path() -> str:
-    """Get absolute path to the patient database file."""
-    if os.path.isabs(DATABASE_PATH):
-        return DATABASE_PATH
-    # Relative to project root (parent of backend/)
-    project_root = Path(__file__).parent.parent
-    return str(project_root / DATABASE_PATH)
 
 
 async def get_all_patients() -> list[dict]:
@@ -36,19 +23,13 @@ async def get_all_patients() -> list[dict]:
     Returns:
         List of patient dicts with id, first_name, last_name, member_id
     """
-    db_path = get_db_path()
-
     try:
-        async with aiosqlite.connect(db_path) as db:
-            db.row_factory = aiosqlite.Row
-            query = """
-                SELECT id, first_name, last_name, member_id, date_of_birth
-                FROM patients
-                ORDER BY last_name, first_name
-            """
-            async with db.execute(query) as cursor:
-                rows = await cursor.fetchall()
-                return [dict(row) for row in rows]
+        rows = await db.fetch("""
+            SELECT id, first_name, last_name, member_id, date_of_birth
+            FROM patients
+            ORDER BY last_name, first_name
+        """)
+        return [dict(row) for row in rows]
     except Exception as e:
         logger.error(f"PATIENT_DB error fetching all patients: {e}")
         raise
@@ -69,22 +50,15 @@ async def get_patients_by_ids(patient_ids: list[int]) -> list[dict]:
     if not patient_ids:
         return []
 
-    db_path = get_db_path()
-
     try:
-        async with aiosqlite.connect(db_path) as db:
-            db.row_factory = aiosqlite.Row
-            # Build parameterized query for IN clause
-            placeholders = ",".join("?" * len(patient_ids))
-            query = f"""
-                SELECT id, first_name, last_name, member_id
-                FROM patients
-                WHERE id IN ({placeholders})
-                ORDER BY last_name, first_name
-            """
-            async with db.execute(query, patient_ids) as cursor:
-                rows = await cursor.fetchall()
-                return [dict(row) for row in rows]
+        # PostgreSQL uses ANY($1) with array for IN clause
+        rows = await db.fetch("""
+            SELECT id, first_name, last_name, member_id
+            FROM patients
+            WHERE id = ANY($1)
+            ORDER BY last_name, first_name
+        """, patient_ids)
+        return [dict(row) for row in rows]
     except Exception as e:
         logger.error(f"PATIENT_DB error fetching patients: {e}")
         raise
@@ -100,16 +74,11 @@ async def get_patient_by_id(patient_id: int) -> Optional[dict]:
     Returns:
         Patient dict with all demographic fields, or None if not found
     """
-    db_path = get_db_path()
-
     try:
-        async with aiosqlite.connect(db_path) as db:
-            db.row_factory = aiosqlite.Row
-            async with db.execute(
-                "SELECT * FROM patients WHERE id = ?", (patient_id,)
-            ) as cursor:
-                row = await cursor.fetchone()
-                return dict(row) if row else None
+        row = await db.fetchrow(
+            "SELECT * FROM patients WHERE id = $1", patient_id
+        )
+        return dict(row) if row else None
     except Exception as e:
         logger.error(f"PATIENT_DB error fetching patient {patient_id}: {e}")
         raise

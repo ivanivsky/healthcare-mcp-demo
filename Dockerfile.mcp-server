@@ -11,20 +11,18 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
+# MCP server imports backend.db for shared PostgreSQL pool
+COPY backend/ ./backend/
 COPY mcp_server/ ./mcp_server/
 COPY config.yaml .
 COPY scripts/seed_database.py ./scripts/
 
-# Create data directory for SQLite
-RUN mkdir -p data logs
-
-# Copy and seed database (for demo purposes)
-COPY data/ ./data/
+# Create logs directory
+RUN mkdir -p logs
 
 # Environment variables for Cloud Run
 ENV MCP_HOST=0.0.0.0
 ENV MCP_PORT=8001
-ENV DATABASE_PATH=/app/data/health_advisor.db
 
 # Expose the MCP server port
 EXPOSE 8001

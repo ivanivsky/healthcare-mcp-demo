@@ -1,6 +1,6 @@
 #!/bin/bash
 # My Health Access - Cloud Run Deployment Script
-# Usage: ./deploy.sh [mcp|backend|all]
+# Usage: ./deploy.sh [mcp|backend|all|status]
 
 set -e
 
@@ -42,7 +42,9 @@ deploy_mcp() {
         --cpu 1 \
         --min-instances 0 \
         --max-instances 3 \
-        --set-env-vars "MCP_HOST=0.0.0.0,MCP_PORT=8001,MCP_TRANSPORT=sse"
+        --add-cloudsql-instances ${PROJECT_ID}:${REGION}:healthcare-db \
+        --set-env-vars "MCP_HOST=0.0.0.0,MCP_PORT=8001,MCP_TRANSPORT=sse,LOG_LEVEL=INFO" \
+        --set-secrets "MCP_INTERNAL_TOKEN=mcp-internal-token:latest,MCP_JWT_SECRET=mcp-jwt-secret:latest,DB_CONNECTION_STRING=db-connection-string:latest"
 
     # Get the MCP server URL
     MCP_URL=$(gcloud run services describe ${MCP_SERVICE} \
@@ -83,18 +85,6 @@ deploy_backend() {
     echo ">>> Pushing backend image to Artifact Registry..."
     docker push ${BACKEND_IMAGE}
 
-    # Check for ANTHROPIC_API_KEY
-    if [ -z "${ANTHROPIC_API_KEY}" ]; then
-        if [ -f .env ]; then
-            source .env
-        fi
-    fi
-
-    if [ -z "${ANTHROPIC_API_KEY}" ]; then
-        echo "ERROR: ANTHROPIC_API_KEY not set. Export it or add to .env file."
-        exit 1
-    fi
-
     echo ">>> Deploying backend to Cloud Run..."
     echo "    MCP Server URL: ${MCP_SERVER_URL}"
 
@@ -109,8 +99,10 @@ deploy_backend() {
         --cpu 1 \
         --min-instances 0 \
         --max-instances 5 \
-        --set-env-vars "BACKEND_HOST=0.0.0.0,BACKEND_PORT=8080,MCP_SERVER_URL=${MCP_SERVER_URL},HTTPS_ONLY=true" \
-        --set-secrets "ANTHROPIC_API_KEY=anthropic-api-key:latest,SESSION_SECRET=session-secret:latest"
+        --add-cloudsql-instances ${PROJECT_ID}:${REGION}:healthcare-db \
+        --set-env-vars "BACKEND_HOST=0.0.0.0,BACKEND_PORT=8080,MCP_SERVER_URL=${MCP_SERVER_URL},HTTPS_ONLY=true,DEBUG=false,LOG_LEVEL=INFO,FIREBASE_API_KEY=AIzaSyC9IgURwS2nCxnou6QwW--x07DRTaG63ZY,FIREBASE_AUTH_DOMAIN=healthcare-demo-app.firebaseapp.com" \
+        --set-env-vars "^|^CORS_ORIGINS=https://ai-wtf.xyz,https://www.ai-wtf.xyz,https://my-health-access-backend-834239374191.us-central1.run.app" \
+        --set-secrets "ANTHROPIC_API_KEY=anthropic-api-key:latest,FIREBASE_PROJECT_ID=firebase-project-id:latest,MCP_INTERNAL_TOKEN=mcp-internal-token:latest,MCP_JWT_SECRET=mcp-jwt-secret:latest,DB_CONNECTION_STRING=db-connection-string:latest"
 
     # Get the backend URL
     BACKEND_URL=$(gcloud run services describe ${BACKEND_SERVICE} \

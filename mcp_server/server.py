@@ -22,6 +22,7 @@ load_dotenv()
 # Add project root to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from backend import db
 from mcp_server.database import (
     init_database,
     get_all_patients,
@@ -446,10 +447,17 @@ async def get_lab_results(patient_id: int, limit: int = 20, auth_context: dict |
 # ============================================================================
 
 async def init():
-    """Initialize database before starting server."""
-    logger.info("Initializing database...")
-    await init_database()
-    logger.info("Database initialized")
+    """Initialize PostgreSQL connection pool before starting server."""
+    logger.info("Initializing PostgreSQL connection pool...")
+    await db.init_pool()
+    logger.info("PostgreSQL connection pool ready")
+
+
+async def shutdown():
+    """Close PostgreSQL connection pool on shutdown."""
+    logger.info("Closing PostgreSQL connection pool...")
+    await db.close_pool()
+    logger.info("PostgreSQL connection pool closed")
 
 
 def run_sse_server(host: str, port: int):
@@ -513,6 +521,7 @@ def run_sse_server(host: str, port: int):
             Mount("/messages/", app=sse_transport.handle_post_message),
         ],
         on_startup=[init],
+        on_shutdown=[shutdown],
     )
 
     logger.info(f"SSE server listening on http://{host}:{port}")
@@ -550,6 +559,7 @@ def run_http_server(host: str, port: int):
             Route("/mcp", endpoint=handle_http, methods=["POST"]),
         ],
         on_startup=[init],
+        on_shutdown=[shutdown],
     )
 
     logger.info(f"HTTP server listening on http://{host}:{port}")

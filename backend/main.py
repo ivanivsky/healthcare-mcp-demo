@@ -57,6 +57,7 @@ from backend.patient_db import (
     get_patient_by_id as get_patient_from_db,
     get_all_patients,
 )
+from backend import db
 
 # Load config
 config = get_config()
@@ -177,21 +178,28 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Could not log SDK versions: {e}")
 
-    # Initialize and seed database on startup.
+    # Initialize PostgreSQL connection pool and seed database on startup.
     # On Cloud Run, containers are stateless so this runs every time.
     # The seed data is idempotent — same patients, same data, every time.
     try:
-        from mcp_server.database import init_database
-        from scripts.seed_database import main as seed_database_main
-        logger.info("Initializing patient database...")
-        await init_database()
+        from scripts.seed_database import init_database as init_schema, seed_patients, seed_medical_records, seed_prescriptions, seed_appointments, seed_insurance, seed_lab_results
+        logger.info("Initializing PostgreSQL connection pool...")
+        await db.init_pool()
+        logger.info("Creating database schema...")
+        await init_schema()
         logger.info("Seeding patient database...")
-        await seed_database_main()
-        logger.info("Patient database ready.")
+        await seed_patients()
+        await seed_medical_records()
+        await seed_prescriptions()
+        await seed_appointments()
+        await seed_insurance()
+        await seed_lab_results()
+        patient_count = await db.fetchval("SELECT COUNT(*) FROM patients")
+        logger.info(f"Patient database ready with {patient_count} patients.")
     except Exception as e:
         logger.error(f"Database initialization failed: {e}")
         raise
-
+    
     # Initialize Firebase Admin SDK
     if init_firebase():
         logger.info("Firebase authentication enabled")
@@ -232,6 +240,8 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("Shutting down My Health Access backend...")
     await shutdown_mcp_client()
+    await db.close_pool()
+    logger.info("PostgreSQL connection pool closed.")
 
 
 # Create FastAPI app
