@@ -9,6 +9,7 @@ let currentUser = null;
 let currentUserRole = null;
 let securityConfig = null;
 let isReadOnly = false;
+let systemPrompts = null;
 
 // Boolean controls to track for posture summary (excludes system_prompt_level)
 const BOOLEAN_CONTROLS = [
@@ -338,6 +339,11 @@ function renderControls() {
     radioInputs.forEach(input => {
         input.addEventListener('change', (e) => {
             updateSecurityControl('system_prompt_level', e.target.value);
+            // Update prompt viewer if open
+            const content = document.getElementById('promptViewerContent');
+            if (content && content.style.display !== 'none') {
+                updatePromptViewerText();
+            }
         });
     });
 
@@ -407,6 +413,77 @@ function revertControl(controlName) {
             toggle.checked = securityConfig[controlName];
         }
     }
+}
+
+// ============================================================================
+// Prompt Viewer
+// ============================================================================
+
+async function loadSystemPrompts() {
+    if (systemPrompts) return; // already loaded
+
+    try {
+        const token = await currentUser.getIdToken();
+        const response = await fetch('/api/system-prompts', {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (!response.ok) throw new Error('Failed to load prompts');
+        systemPrompts = await response.json();
+    } catch (error) {
+        console.error('[Settings] Failed to load system prompts:', error);
+        systemPrompts = null;
+    }
+}
+
+async function togglePromptViewer() {
+    const content = document.getElementById('promptViewerContent');
+    const icon = document.querySelector('.prompt-viewer-icon');
+    const loading = document.getElementById('promptViewerLoading');
+    const textEl = document.getElementById('promptViewerText');
+
+    const isOpen = content.style.display !== 'none';
+
+    if (isOpen) {
+        // Collapse
+        content.style.display = 'none';
+        icon.textContent = '▶';
+        icon.classList.remove('expanded');
+    } else {
+        // Expand
+        content.style.display = 'block';
+        icon.textContent = '▼';
+        icon.classList.add('expanded');
+
+        // Load prompts if not yet loaded
+        if (!systemPrompts) {
+            loading.style.display = 'block';
+            textEl.style.display = 'none';
+            await loadSystemPrompts();
+        }
+
+        // Show the prompt for the currently selected level
+        updatePromptViewerText();
+    }
+}
+
+function updatePromptViewerText() {
+    const loading = document.getElementById('promptViewerLoading');
+    const textEl = document.getElementById('promptViewerText');
+
+    if (!systemPrompts) {
+        loading.textContent = 'Failed to load system prompts.';
+        return;
+    }
+
+    // Get the currently selected level
+    const selectedRadio = document.querySelector(
+        'input[name="system_prompt_level"]:checked'
+    );
+    const level = selectedRadio ? selectedRadio.value : 'strong';
+
+    loading.style.display = 'none';
+    textEl.style.display = 'block';
+    textEl.textContent = systemPrompts[level] || 'Prompt not available.';
 }
 
 function updatePostureSummary() {
@@ -752,10 +829,11 @@ async function clearUserClaims() {
     }
 }
 
-// Make handleLogout available globally for onclick
+// Make functions available globally for onclick handlers
 window.handleLogout = handleLogout;
 window.handleReset = handleReset;
 window.lookupUser = lookupUser;
 window.updateUserRole = updateUserRole;
 window.updateUserPatients = updateUserPatients;
 window.clearUserClaims = clearUserClaims;
+window.togglePromptViewer = togglePromptViewer;

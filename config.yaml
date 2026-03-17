@@ -30,11 +30,16 @@ frontend:
   host: "localhost"
   port: 8000
 
-# Claude API Configuration
-# Note: Set ANTHROPIC_API_KEY environment variable before running
-claude:
-  model: "claude-sonnet-4-20250514"
-  max_tokens: 4096
+# AI Model Configuration (Vertex AI / Gemini)
+# No API key needed — uses Application Default Credentials locally
+# and Workload Identity on Cloud Run.
+ai:
+  provider: "vertex_ai"
+  model: "gemini-2.5-flash"
+  location: "us-central1"  # Also set via GOOGLE_CLOUD_LOCATION env var
+  max_output_tokens: 4096
+  temperature: 0.0
+  # project: read from GOOGLE_CLOUD_PROJECT env var
 
 # Database Configuration
 database:

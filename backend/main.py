@@ -40,7 +40,7 @@ from backend.mcp_client import (
     start_keepalive,
     MCPConnectionError,
 )
-from backend.claude_agent import HealthAdvisorAgent
+from backend.claude_agent import HealthAdvisorAgent, get_all_system_prompts
 from backend.debug_logger import get_debug_logger
 from backend.auth_context import AuthContext
 from backend.firebase_auth import (
@@ -172,9 +172,9 @@ async def lifespan(app: FastAPI):
 
     # Log SDK versions for debugging compatibility issues
     try:
-        import anthropic
+        from google import genai
         import httpx
-        logger.info(f"SDK_VERSIONS anthropic={anthropic.__version__} httpx={httpx.__version__}")
+        logger.info(f"SDK_VERSIONS google-genai={genai.__version__} httpx={httpx.__version__}")
     except Exception as e:
         logger.warning(f"Could not log SDK versions: {e}")
 
@@ -550,6 +550,24 @@ async def get_frontend_config():
         firebase_config["projectId"] = project_id
 
     return {"firebase": firebase_config}
+
+
+@app.get("/api/system-prompts")
+async def get_system_prompts(
+    user: FirebaseUser = Depends(get_current_user),
+):
+    """
+    Get the system prompt text for each security level.
+
+    Returns all three prompt templates (insecure, weak, strong) so users
+    can understand what the AI agent is instructed to do at each level.
+
+    Intentionally available to any authenticated user — not admin-only —
+    for educational and testing purposes. Understanding the prompts helps
+    developers and security testers evaluate the system.
+    """
+    logger.info(f"SYSTEM_PROMPTS_VIEWED uid={user.uid}")
+    return get_all_system_prompts()
 
 
 @app.get("/api/health")

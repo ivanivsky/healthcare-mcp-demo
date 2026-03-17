@@ -14,7 +14,7 @@ fi
 
 # Check required vars
 missing=""
-[ -z "$ANTHROPIC_API_KEY" ] && missing="$missing ANTHROPIC_API_KEY"
+[ -z "$GOOGLE_CLOUD_PROJECT" ] && missing="$missing GOOGLE_CLOUD_PROJECT"
 [ -z "$FIREBASE_API_KEY" ] && missing="$missing FIREBASE_API_KEY"
 [ -z "$FIREBASE_AUTH_DOMAIN" ] && missing="$missing FIREBASE_AUTH_DOMAIN"
 
@@ -26,7 +26,7 @@ if [ -n "$missing" ]; then
     echo "  # Edit .env with your actual values"
     echo ""
     echo "Option 2: Export directly:"
-    echo "  export ANTHROPIC_API_KEY='sk-ant-...'"
+    echo "  export GOOGLE_CLOUD_PROJECT='healthcare-demo-app'"
     echo "  export FIREBASE_API_KEY='AIza...'"
     echo "  export FIREBASE_AUTH_DOMAIN='your-project.firebaseapp.com'"
     exit 1

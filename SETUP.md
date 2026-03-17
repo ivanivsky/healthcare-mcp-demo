@@ -5,7 +5,9 @@ This guide walks you through setting up the My Health Access demo application on
 ## Prerequisites
 
 - **Python 3.12 or 3.13** (Python 3.14 is not yet supported due to pydantic-core compatibility)
-- An Anthropic API key (get one at https://console.anthropic.com)
+- **Google Cloud authentication** (uses Application Default Credentials)
+  - Run `gcloud auth application-default login` to authenticate locally
+  - On Cloud Run, uses Workload Identity automatically
 
 ## Quick Start
 
@@ -38,7 +40,7 @@ pip install -r requirements.txt
 cp .env.example .env
 
 # Edit .env with your actual values:
-# ANTHROPIC_API_KEY=sk-ant-api03-...
+# GOOGLE_CLOUD_PROJECT=healthcare-demo-app
 # FIREBASE_API_KEY=AIzaSyC...
 # FIREBASE_AUTH_DOMAIN=your-project.firebaseapp.com
 ```
@@ -47,7 +49,8 @@ cp .env.example .env
 
 ```bash
 # On macOS/Linux:
-export ANTHROPIC_API_KEY="sk-ant-api03-..."
+export GOOGLE_CLOUD_PROJECT="healthcare-demo-app"
+export GOOGLE_CLOUD_LOCATION="us-central1"  # optional, defaults to us-central1
 export FIREBASE_API_KEY="AIzaSyC..."
 export FIREBASE_AUTH_DOMAIN="your-project.firebaseapp.com"
 export FIREBASE_PROJECT_ID="your-project-id"  # optional
@@ -119,7 +122,7 @@ Open your browser and navigate to: **http://localhost:8080**
 │  (Port 8080)    │     │   (Port 8080)   │     │   (Port 8001)   │
 │                 │     │                 │     │                 │
 │  - Chat UI      │     │  - MCP Client   │     │  - PHI Tools    │
-│  - Debug View   │     │  - Claude Agent │     │  - SQLite DB    │
+│  - Debug View   │     │  - Gemini Agent │     │  - PostgreSQL   │
 └─────────────────┘     └─────────────────┘     └─────────────────┘
 ```
 
@@ -177,9 +180,12 @@ The MCP SDK 1.2.0 requires `pydantic>=2.10.1` and `pydantic-settings>=2.6.1`.
 
 Make sure the MCP server is running in a separate terminal before starting the backend.
 
-### "ANTHROPIC_API_KEY not set"
+### "Google Cloud authentication errors"
 
-Ensure the environment variable is set in the same terminal where you run the backend.
+Ensure you've authenticated with Google Cloud:
+```bash
+gcloud auth application-default login
+```
 
 ### Database errors
 

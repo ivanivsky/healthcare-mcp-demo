@@ -1319,6 +1319,61 @@ body {
     flex: 1;
 }
 
+/* Prompt Viewer */
+.prompt-viewer {
+    margin-top: 1rem;
+    border-top: 1px solid var(--border-color);
+    padding-top: 0.75rem;
+}
+
+.prompt-viewer-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: none;
+    border: none;
+    color: var(--primary-color);
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    padding: 0.25rem 0;
+    transition: opacity 0.2s;
+}
+
+.prompt-viewer-toggle:hover {
+    opacity: 0.8;
+}
+
+.prompt-viewer-icon {
+    font-size: 0.75rem;
+    transition: transform 0.2s;
+}
+
+.prompt-viewer-content {
+    margin-top: 0.75rem;
+}
+
+.prompt-viewer-loading {
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+    padding: 0.5rem 0;
+}
+
+.prompt-viewer-text {
+    background-color: var(--background-color);
+    border: 1px solid var(--border-color);
+    border-radius: 0.375rem;
+    padding: 1rem;
+    font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+    font-size: 0.8125rem;
+    line-height: 1.6;
+    color: var(--text-primary);
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
 /* Settings Actions */
 .settings-actions {
     display: flex;

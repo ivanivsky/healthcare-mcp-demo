@@ -180,6 +180,16 @@
                             <span class="radio-description">Explicit patient binding, error suppression, manipulation resistance.</span>
                         </label>
                     </div>
+                    <div class="prompt-viewer">
+                        <button class="prompt-viewer-toggle" id="promptViewerToggle" onclick="togglePromptViewer()">
+                            <span class="prompt-viewer-icon">▶</span>
+                            <span class="prompt-viewer-label">View system prompt</span>
+                        </button>
+                        <div class="prompt-viewer-content" id="promptViewerContent" style="display: none;">
+                            <div class="prompt-viewer-loading" id="promptViewerLoading">Loading...</div>
+                            <pre class="prompt-viewer-text" id="promptViewerText" style="display: none;"></pre>
+                        </div>
+                    </div>
                     <div class="control-status" id="status-system_prompt_level"></div>
                 </div>
 

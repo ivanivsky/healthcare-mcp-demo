@@ -71,17 +71,6 @@ def get_config() -> dict[str, Any]:
     return get_config._cache
 
 
-def get_anthropic_api_key() -> str:
-    """Get Anthropic API key from environment."""
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise ValueError(
-            "ANTHROPIC_API_KEY environment variable is not set. "
-            "Please set it before running the application."
-        )
-    return api_key
-
-
 # ============================================================================
 # Runtime Security Configuration
 # ============================================================================

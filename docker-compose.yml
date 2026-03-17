@@ -30,7 +30,8 @@ services:
       - BACKEND_HOST=0.0.0.0
       - BACKEND_PORT=8080
       - MCP_SERVER_URL=http://mcp-server:8001/sse
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT:-healthcare-demo-app}
+      - GOOGLE_CLOUD_LOCATION=${GOOGLE_CLOUD_LOCATION:-us-central1}
     ports:
       - "8080:8080"
     depends_on:
