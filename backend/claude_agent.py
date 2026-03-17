@@ -172,6 +172,12 @@ def _convert_mcp_tools_to_gemini(mcp_tools: list[dict]) -> list:
         # Remove $schema key if present — Gemini doesn't accept it
         parameters.pop("$schema", None)
 
+        if not parameters or parameters.get("type") != "object":
+            parameters = {
+                "type": "object",
+                "properties": {}
+            }
+
         func_decl = types.FunctionDeclaration(
             name=tool["name"],
             description=tool.get("description", ""),
