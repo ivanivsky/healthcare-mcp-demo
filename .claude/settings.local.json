@@ -29,7 +29,8 @@
       "Bash(/Users/paulivanivsky/Engineering/claudecode/healthcare-mcp-demo-v2/venv/bin/pip index versions:*)",
       "Bash(/Users/paulivanivsky/Engineering/claudecode/healthcare-mcp-demo-v2/venv/bin/pip install anthropic==)",
       "Bash(/Users/paulivanivsky/Engineering/claudecode/healthcare-mcp-demo-v2/venv/bin/pip install:*)",
-      "Bash(/Users/paulivanivsky/Engineering/claudecode/healthcare-mcp-demo-v2/venv/bin/pip show mcp pydantic)"
+      "Bash(/Users/paulivanivsky/Engineering/claudecode/healthcare-mcp-demo-v2/venv/bin/pip show mcp pydantic)",
+      "WebFetch(domain:google.github.io)"
     ]
   }
 }

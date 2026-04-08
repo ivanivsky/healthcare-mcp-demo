@@ -8,6 +8,10 @@ uvicorn[standard]==0.30.6
 # Uses Workload Identity in Cloud Run, ADC locally
 google-genai>=1.0.0
 
+# Google Agent Development Kit (ADK)
+# Provides LlmAgent, Runner, session management, and callback system
+google-adk>=1.0.0
+
 # MCP SDK
 mcp==1.2.0
 

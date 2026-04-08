@@ -61,8 +61,7 @@ logger = logging.getLogger("mcp_server")
 
 # Create MCP server instance
 mcp = FastMCP(
-    "My Health Access MCP Server",
-    version="1.0.0",
+    "My Health Access MCP Server"
 )
 
 

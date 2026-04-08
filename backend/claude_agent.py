@@ -1,19 +1,31 @@
 """
 Health Advisor AI Agent.
+ADK-based implementation using Google Agent Development Kit.
+
 Handles conversation with Vertex AI (Gemini) and MCP tool orchestration.
+Uses ADK's Runner for the agentic loop instead of custom code.
 
 Includes configurable security controls:
 - System prompt security levels (insecure/weak/strong)
 - Deterministic error responses to prevent information leakage
+- MCP bearer token authentication (via mcp_client.py)
+- Auth context JWT signing (via mcp_client.py)
 """
 
+import inspect
 import json
 import logging
 import os
 from typing import Any, Optional
 
 from google import genai
-from google.genai import types
+from google.genai import types as genai_types
+from google.adk.agents import LlmAgent
+from google.adk.runners import Runner
+from google.adk.sessions import InMemorySessionService
+from google.adk.agents.callback_context import CallbackContext
+from google.adk.models.llm_request import LlmRequest
+from google.adk.models.llm_response import LlmResponse
 
 from backend.config import (
     get_config,
@@ -29,6 +41,10 @@ logger = logging.getLogger("health_advisor_agent")
 # Model configuration
 MODEL = "gemini-2.5-flash"
 
+
+# ============================================================================
+# System Prompt Templates
+# ============================================================================
 
 def get_all_system_prompts() -> dict:
     """
@@ -123,6 +139,10 @@ CLINICAL GUIDELINES:
 - For sensitive findings, encourage the patient to speak with their provider."""
 
 
+# ============================================================================
+# Error Detection
+# ============================================================================
+
 def _is_authorization_error(result_text: str) -> bool:
     """
     Detect if a tool result represents an authorization or system error
@@ -163,100 +183,294 @@ def _is_authorization_error(result_text: str) -> bool:
     ])
 
 
-def _convert_mcp_tools_to_gemini(mcp_tools: list[dict]) -> list:
-    """Convert MCP tool definitions to Gemini FunctionDeclaration format."""
-    function_declarations = []
-    for tool in mcp_tools:
-        # Convert inputSchema to Gemini's Schema format
-        parameters = tool.get("inputSchema", {}).copy()
-        # Remove $schema key if present — Gemini doesn't accept it
-        parameters.pop("$schema", None)
-
-        if not parameters or parameters.get("type") != "object":
-            parameters = {
-                "type": "object",
-                "properties": {}
-            }
-
-        func_decl = types.FunctionDeclaration(
-            name=tool["name"],
-            description=tool.get("description", ""),
-            parameters=parameters,
-        )
-        function_declarations.append(func_decl)
-
-    return [types.Tool(function_declarations=function_declarations)]
-
-
-def _convert_history_to_gemini(conversation_history: list[dict]) -> list:
-    """Convert conversation history from Anthropic format to Gemini format."""
-    gemini_contents = []
-
-    for msg in conversation_history:
-        role = msg.get("role", "user")
-        content = msg.get("content", "")
-
-        # Map Anthropic roles to Gemini roles
-        gemini_role = "model" if role == "assistant" else "user"
-
-        # Handle string content
-        if isinstance(content, str):
-            gemini_contents.append(
-                types.Content(role=gemini_role, parts=[types.Part(text=content)])
-            )
-        # Handle list content (tool use/results)
-        elif isinstance(content, list):
-            parts = []
-            for item in content:
-                if isinstance(item, dict):
-                    if item.get("type") == "text":
-                        parts.append(types.Part(text=item.get("text", "")))
-                    elif item.get("type") == "tool_use":
-                        # Convert tool use to function call
-                        parts.append(types.Part(
-                            function_call=types.FunctionCall(
-                                name=item.get("name", ""),
-                                args=item.get("input", {})
-                            )
-                        ))
-                    elif item.get("type") == "tool_result":
-                        # Convert tool result to function response
-                        parts.append(types.Part(
-                            function_response=types.FunctionResponse(
-                                name=item.get("tool_use_id", "unknown"),
-                                response={"result": item.get("content", "")}
-                            )
-                        ))
-            if parts:
-                gemini_contents.append(types.Content(role=gemini_role, parts=parts))
-
-    return gemini_contents
-
+# ============================================================================
+# ADK Health Advisor Agent
+# ============================================================================
 
 class HealthAdvisorAgent:
     """
-    AI agent that uses Gemini to answer health-related questions.
-    Orchestrates MCP tool calls to retrieve patient information.
+    ADK-based Health Advisor agent.
+
+    Uses Google Agent Development Kit for the agentic loop instead of
+    custom code. MCP tools are wrapped as ADK function tools that call
+    through mcp_client.py to preserve bearer token auth and auth context
+    signing.
+
+    The agent instruction (system prompt) is set dynamically per-request
+    based on the security level and patient context.
     """
 
     def __init__(self, mcp_client: MCPClient, debug_logger: DebugLogger):
+        """
+        Initialize the ADK agent.
+
+        Args:
+            mcp_client: Connected MCP client for tool calls
+            debug_logger: Debug logger for the debug panel
+        """
         self.config = get_config()
         self.mcp_client = mcp_client
         self.debug_logger = debug_logger
 
-        # Initialize Vertex AI client
-        # Uses Workload Identity in Cloud Run, ADC locally
-        self.client = genai.Client(
-            vertexai=True,
-            project=os.environ.get("GOOGLE_CLOUD_PROJECT", "healthcare-demo-app"),
-            location=os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1"),
+        # Per-request context (set before each chat call)
+        self._current_auth: Optional[AuthContext] = None
+        self._current_patient_id: Optional[int] = None
+        self._current_patient_name: Optional[str] = None
+        self._current_tool_calls: list[dict] = []
+        self._total_input_tokens: int = 0
+        self._total_output_tokens: int = 0
+
+        # ADK components
+        self._session_service = InMemorySessionService()
+        self._agent: Optional[LlmAgent] = None
+        self._runner: Optional[Runner] = None
+
+        # Model configuration from config.yaml
+        ai_config = self.config.get("ai", {})
+        self._model = ai_config.get("model", MODEL)
+
+        # Initialize the agent
+        self._initialize_agent()
+
+        logger.info(
+            f"ADK_AGENT_INITIALIZED name=health_advisor model={self._model} "
+            f"tools_count={len(self.mcp_client.tools)}"
         )
 
-        # Model configuration
-        ai_config = self.config.get("ai", {})
-        self.model = ai_config.get("model", MODEL)
-        self.max_output_tokens = ai_config.get("max_output_tokens", 4096)
-        self.temperature = ai_config.get("temperature", 0.0)
+    def _initialize_agent(self):
+        """Initialize the LlmAgent and Runner."""
+        # Create tool wrappers for MCP tools
+        tools = self._create_tool_wrappers()
+
+        # Create the LlmAgent with a placeholder instruction
+        # The real instruction is set per-request in chat()
+        self._agent = LlmAgent(
+            name="health_advisor",
+            model=self._model,
+            instruction="You are a healthcare assistant.",  # Overridden per-request
+            tools=tools,
+            before_model_callback=self._before_model_callback,
+        )
+
+        # Create the Runner
+        self._runner = Runner(
+            agent=self._agent,
+            app_name="health_advisor",
+            session_service=self._session_service,
+        )
+
+    def _create_tool_wrappers(self) -> list:
+        """
+        Create ADK function tools that wrap MCP tools.
+
+        Each tool function calls mcp_client.call_tool() which handles:
+        - Bearer token authentication for transport
+        - Auth context JWT signing
+        - Connection management and retry
+        """
+        tools = []
+        for mcp_tool in self.mcp_client.tools:
+            tool_func = self._make_tool_function(mcp_tool)
+            tools.append(tool_func)
+        return tools
+
+    def _make_tool_function(self, mcp_tool: dict):
+        """
+        Create a wrapper function for an MCP tool.
+
+        The function captures self to access mcp_client and current auth context.
+        """
+        tool_name = mcp_tool["name"]
+        tool_description = mcp_tool.get("description", "")
+
+        # Capture agent reference for closure
+        agent_self = self
+
+        async def tool_function(**kwargs) -> str:
+            """Wrapper function that calls the MCP tool."""
+            # Log the tool call
+            agent_self.debug_logger.log_mcp_request({
+                "tool": tool_name,
+                "arguments": kwargs,
+                "request_id": agent_self._current_auth.request_id if agent_self._current_auth else None,
+                "sub": agent_self._current_auth.sub if agent_self._current_auth else None,
+            })
+
+            logger.info(f"ADK_TOOL_CALL start tool={tool_name}")
+
+            try:
+                # Call MCP tool via mcp_client (handles auth context signing)
+                result = await agent_self.mcp_client.call_tool(
+                    tool_name, kwargs, auth=agent_self._current_auth
+                )
+
+                # Extract result text
+                result_text = ""
+                for item in result.get("content", []):
+                    if item.get("type") == "text":
+                        result_text = item.get("text", "")
+                        break
+
+                is_error = result.get("is_error", False) or _is_authorization_error(result_text)
+
+                # Track tool call for response
+                agent_self._current_tool_calls.append({
+                    "tool": tool_name,
+                    "arguments": kwargs,
+                    "result": result_text,
+                    "is_error": is_error,
+                })
+
+                agent_self.debug_logger.log_mcp_response({
+                    "tool": tool_name,
+                    "result": result_text[:500] if result_text else "No result",
+                })
+
+                logger.info(f"ADK_TOOL_CALL end tool={tool_name} success=True is_error={is_error}")
+
+                # If deterministic errors are enabled and this is an error,
+                # return sanitized response (this prevents error details from
+                # reaching the LLM in the tool response)
+                if is_error and is_security_control_enabled("deterministic_error_responses"):
+                    logger.info(
+                        f"DETERMINISTIC_ERROR_INTERCEPT tool={tool_name} "
+                        f"original_error={result_text[:100]}"
+                    )
+                    agent_self.debug_logger.log_agent_reasoning({
+                        "action": "error_intercepted",
+                        "tool": tool_name,
+                        "original_error": result_text[:200],
+                        "suppressed": True,
+                    })
+                    return "Unable to retrieve information. Access denied."
+
+                return result_text
+
+            except Exception as e:
+                error_msg = str(e)
+                logger.error(f"ADK_TOOL_CALL end tool={tool_name} success=False error={error_msg}")
+
+                agent_self._current_tool_calls.append({
+                    "tool": tool_name,
+                    "arguments": kwargs,
+                    "error": error_msg,
+                    "is_error": True,
+                })
+
+                agent_self.debug_logger.log_error({
+                    "tool": tool_name,
+                    "error": error_msg,
+                })
+
+                # Handle error with deterministic response if enabled
+                if is_security_control_enabled("deterministic_error_responses"):
+                    logger.info(
+                        f"DETERMINISTIC_ERROR_INTERCEPT tool={tool_name} "
+                        f"exception={error_msg[:100]}"
+                    )
+                    agent_self.debug_logger.log_agent_reasoning({
+                        "action": "exception_intercepted",
+                        "tool": tool_name,
+                        "original_error": error_msg[:200],
+                        "suppressed": True,
+                    })
+                    return "Unable to retrieve information. Access denied."
+
+                return f"Error: {error_msg}"
+
+        # Set function metadata for ADK
+        tool_function.__name__ = tool_name
+        tool_function.__doc__ = tool_description
+
+        # Build an explicit signature so ADK can generate the correct Gemini
+        # function declaration schema.  Without this, ADK sees only **kwargs,
+        # produces an empty parameter schema, and Gemini never sends arguments.
+        _JSON_TYPE_MAP = {
+            "string": str,
+            "integer": int,
+            "boolean": bool,
+            "number": float,
+        }
+        input_schema = mcp_tool.get("input_schema") or {}
+        properties = input_schema.get("properties") or {}
+        required = set(input_schema.get("required") or [])
+
+        sig_params = []
+        for param_name, param_schema in properties.items():
+            if param_name == "auth_context":
+                # Injected by mcp_client; never exposed to the LLM
+                continue
+            annotation = _JSON_TYPE_MAP.get(
+                param_schema.get("type", "string"), str
+            )
+            default = (
+                inspect.Parameter.empty
+                if param_name in required
+                else None
+            )
+            sig_params.append(
+                inspect.Parameter(
+                    param_name,
+                    kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                    default=default,
+                    annotation=annotation,
+                )
+            )
+
+        tool_function.__signature__ = inspect.Signature(sig_params)
+
+        return tool_function
+
+    def _before_model_callback(
+        self,
+        callback_context: CallbackContext,
+        llm_request: LlmRequest,
+    ) -> Optional[LlmResponse]:
+        """
+        Callback executed before each LLM call.
+
+        Used to intercept tool error results when deterministic_error_responses
+        is enabled. If an error is detected, returns a canned response to
+        prevent the LLM from elaborating on the error.
+
+        Note: Most error interception happens in the tool functions themselves.
+        This callback provides a second layer of defense for any errors that
+        might slip through.
+        """
+        if not is_security_control_enabled("deterministic_error_responses"):
+            return None  # Pass through normally
+
+        # Check if any function responses contain authorization errors
+        # This catches errors in the request being sent to the LLM
+        try:
+            for content in llm_request.contents or []:
+                for part in content.parts or []:
+                    # Check for function_response parts
+                    if hasattr(part, 'function_response') and part.function_response:
+                        response_data = part.function_response.response
+                        if isinstance(response_data, dict):
+                            result_text = response_data.get("result", "")
+                        else:
+                            result_text = str(response_data)
+
+                        if _is_authorization_error(result_text):
+                            logger.info(
+                                "DETERMINISTIC_ERROR_INTERCEPT callback: "
+                                "auth error detected in function_response"
+                            )
+                            # Return canned response - skip LLM call entirely
+                            return LlmResponse(
+                                content=genai_types.Content(
+                                    role="model",
+                                    parts=[genai_types.Part(
+                                        text="I'm unable to retrieve that information right now."
+                                    )]
+                                )
+                            )
+        except Exception as e:
+            logger.warning(f"before_model_callback inspection error: {e}")
+
+        return None  # Pass through normally
 
     def _get_system_prompt(self, patient_id: int, patient_name: str) -> str:
         """
@@ -267,23 +481,11 @@ class HealthAdvisorAgent:
         logger.info(f"AGENT_SYSTEM_PROMPT level={level} patient_id={patient_id}")
 
         if level == "insecure":
-            return self._get_insecure_system_prompt(patient_id, patient_name)
+            return _get_insecure_prompt().format(patient_id=patient_id, patient_name=patient_name)
         elif level == "weak":
-            return self._get_weak_system_prompt(patient_id, patient_name)
+            return _get_weak_prompt().format(patient_id=patient_id, patient_name=patient_name)
         else:
-            return self._get_strong_system_prompt(patient_id, patient_name)
-
-    def _get_insecure_system_prompt(self, patient_id: int, patient_name: str) -> str:
-        """Intentionally insecure system prompt with patient context filled in."""
-        return _get_insecure_prompt().format(patient_id=patient_id, patient_name=patient_name)
-
-    def _get_weak_system_prompt(self, patient_id: int, patient_name: str) -> str:
-        """Weak system prompt with patient context filled in."""
-        return _get_weak_prompt().format(patient_id=patient_id, patient_name=patient_name)
-
-    def _get_strong_system_prompt(self, patient_id: int, patient_name: str) -> str:
-        """Strong system prompt with patient context filled in."""
-        return _get_strong_prompt().format(patient_id=patient_id, patient_name=patient_name)
+            return _get_strong_prompt().format(patient_id=patient_id, patient_name=patient_name)
 
     async def chat(
         self,
@@ -300,285 +502,110 @@ class HealthAdvisorAgent:
             message: User's message
             patient_id: Current patient ID
             patient_name: Current patient name
-            conversation_history: Previous messages in the conversation
+            conversation_history: Previous messages (managed by ADK session)
             auth: Authentication context for identity tracking
 
         Returns:
             Response with assistant message and debug info
         """
-        conversation_history = conversation_history or []
+        # Set per-request context for tool functions
+        self._current_auth = auth
+        self._current_patient_id = patient_id
+        self._current_patient_name = patient_name
+        self._current_tool_calls = []
+        self._total_input_tokens = 0
+        self._total_output_tokens = 0
 
-        # Get MCP tools and convert to Gemini format
-        logger.info(f"AGENT_CHAT start patient_id={patient_id} message_len={len(message)}")
-        mcp_tools = self.mcp_client.get_tools_for_claude()
-        gemini_tools = _convert_mcp_tools_to_gemini(mcp_tools)
-        logger.info(f"AGENT_CHAT tools_count={len(mcp_tools)} tools={[t['name'] for t in mcp_tools]}")
-
-        # Build Gemini contents from conversation history
-        gemini_contents = _convert_history_to_gemini(conversation_history)
-
-        # Add current user message
-        gemini_contents.append(
-            types.Content(role="user", parts=[types.Part(text=message)])
+        logger.info(
+            f"AGENT_CHAT start patient_id={patient_id} message_len={len(message)} "
+            f"sub={auth.sub if auth else None}"
         )
 
-        # Get system prompt (level is logged inside _get_system_prompt)
+        # Set dynamic system prompt
         system_prompt = self._get_system_prompt(patient_id, patient_name)
+        self._agent.instruction = system_prompt
 
-        # Log the request with auth context
+        # Log the request
         self.debug_logger.log_claude_request({
-            "model": self.model,
+            "model": self._model,
             "system_prompt_level": get_system_prompt_level(),
             "system": system_prompt[:200] + "...",
-            "messages": [{"role": c.role, "parts_count": len(c.parts)} for c in gemini_contents],
-            "tools": [t["name"] for t in mcp_tools],
+            "message": message[:100] + "..." if len(message) > 100 else message,
+            "tools": [t["name"] for t in self.mcp_client.tools],
             "request_id": auth.request_id if auth else None,
             "sub": auth.sub if auth else None,
+            "adk_enabled": True,
         })
 
-        # Initial Gemini API call
-        try:
-            response = await self.client.aio.models.generate_content(
-                model=self.model,
-                contents=gemini_contents,
-                config=types.GenerateContentConfig(
-                    system_instruction=system_prompt,
-                    tools=gemini_tools,
-                    max_output_tokens=self.max_output_tokens,
-                    temperature=self.temperature,
-                )
-            )
-        except Exception as e:
-            logger.error(f"AGENT_GEMINI_ERROR initial call failed: {e}")
-            raise
+        # Session management
+        # Use Firebase UID as both user_id and session_id
+        user_id = auth.sub if auth else "anonymous"
+        session_id = f"session_{user_id}_{patient_id}"
 
-        self.debug_logger.log_claude_response({
-            "finish_reason": response.candidates[0].finish_reason if response.candidates else "no_candidates",
-            "parts_count": len(response.candidates[0].content.parts) if response.candidates else 0,
-        })
-
-        # Process response and handle tool calls
-        return await self._process_response(
-            response, gemini_contents, gemini_tools, mcp_tools, patient_id, patient_name, auth
+        # Get or create session
+        session = await self._session_service.get_session(
+            app_name="health_advisor",
+            user_id=user_id,
+            session_id=session_id,
         )
 
-    async def _process_response(
-        self,
-        response,
-        gemini_contents: list,
-        gemini_tools: list,
-        mcp_tools: list[dict],
-        patient_id: int,
-        patient_name: str,
-        auth: AuthContext = None,
-    ) -> dict:
-        """Process Gemini response and handle any tool calls."""
-        tool_calls = []
-        final_text = ""
-        total_input_tokens = 0
-        total_output_tokens = 0
-
-        # Check if deterministic error responses are enabled
-        deterministic_errors_enabled = is_security_control_enabled("deterministic_error_responses")
-
-        # Agentic loop - keep processing until we get a final response
-        while True:
-            # Track usage
-            if hasattr(response, 'usage_metadata') and response.usage_metadata:
-                total_input_tokens += response.usage_metadata.prompt_token_count or 0
-                total_output_tokens += response.usage_metadata.candidates_token_count or 0
-
-            # Check if there are any function calls
-            if not response.candidates:
-                break
-
-            candidate = response.candidates[0]
-            parts = candidate.content.parts if candidate.content else []
-
-            # Find all function calls in this response
-            function_calls = [
-                part for part in parts
-                if hasattr(part, 'function_call') and part.function_call
-            ]
-
-            if not function_calls:
-                # No function calls — extract final text and break
-                for part in parts:
-                    if hasattr(part, 'text') and part.text:
-                        final_text += part.text
-                break
-
-            # Add assistant response to contents
-            gemini_contents.append(candidate.content)
-
-            # Execute all function calls and collect results
-            function_responses = []
-            logger.info(f"AGENT_TOOL_CALLS start count={len(function_calls)} tools={[fc.function_call.name for fc in function_calls]}")
-
-            for part in function_calls:
-                func_call = part.function_call
-                tool_name = func_call.name
-                tool_args = dict(func_call.args) if func_call.args else {}
-
-                self.debug_logger.log_mcp_request({
-                    "tool": tool_name,
-                    "arguments": tool_args,
-                    "request_id": auth.request_id if auth else None,
-                    "sub": auth.sub if auth else None,
-                })
-
-                try:
-                    logger.info(f"AGENT_TOOL_CALL start tool={tool_name}")
-                    result = await self.mcp_client.call_tool(
-                        tool_name, tool_args, auth=auth
-                    )
-                    logger.info(f"AGENT_TOOL_CALL end tool={tool_name} success=True")
-
-                    # Parse the result content
-                    result_text = ""
-                    for item in result["content"]:
-                        if item.get("type") == "text":
-                            result_text = item.get("text", "")
-                            break
-
-                    # Check if this is an error response
-                    is_tool_error = (
-                        result.get("is_error", False) or
-                        _is_authorization_error(result_text)
-                    )
-
-                    # Handle error interception based on deterministic_error_responses setting
-                    if is_tool_error:
-                        if deterministic_errors_enabled:
-                            # Intercept — do not send the actual error to the LLM
-                            logger.info(
-                                f"DETERMINISTIC_ERROR_INTERCEPT tool={tool_name} "
-                                f"original_error={result_text[:100]}"
-                            )
-                            # Log what was suppressed for the debug panel
-                            self.debug_logger.log_agent_reasoning({
-                                "action": "error_intercepted",
-                                "tool": tool_name,
-                                "original_error": result_text[:200],
-                                "suppressed": True,
-                            })
-                            # Replace with a safe neutral message the LLM will not elaborate on
-                            result_text = "Unable to retrieve information. Access denied."
-                        else:
-                            # Deterministic errors disabled — log warning about insecure state
-                            logger.warning(
-                                f"DETERMINISTIC_ERRORS DISABLED — error details sent to LLM. "
-                                f"tool={tool_name} error_preview={result_text[:100]}"
-                            )
-                            self.debug_logger.log_agent_reasoning({
-                                "action": "error_passed_through",
-                                "tool": tool_name,
-                                "error_preview": result_text[:200],
-                                "insecure": True,
-                            })
-
-                    tool_calls.append({
-                        "tool": tool_name,
-                        "arguments": tool_args,
-                        "result": result_text,
-                    })
-
-                    self.debug_logger.log_mcp_response({
-                        "tool": tool_name,
-                        "result": result_text[:500] if result_text else "No result",
-                    })
-
-                    function_responses.append(types.Part(
-                        function_response=types.FunctionResponse(
-                            name=tool_name,
-                            response={"result": result_text}
-                        )
-                    ))
-
-                except Exception as e:
-                    error_msg = f"Error calling tool {tool_name}: {str(e)}"
-                    logger.error(f"AGENT_TOOL_CALL end tool={tool_name} success=False error={e}")
-
-                    # Handle exception errors with deterministic response if enabled
-                    if deterministic_errors_enabled:
-                        logger.info(
-                            f"DETERMINISTIC_ERROR_INTERCEPT tool={tool_name} "
-                            f"exception={str(e)[:100]}"
-                        )
-                        self.debug_logger.log_agent_reasoning({
-                            "action": "exception_intercepted",
-                            "tool": tool_name,
-                            "original_error": str(e)[:200],
-                            "suppressed": True,
-                        })
-                        error_msg = "Unable to retrieve information. Access denied."
-                    else:
-                        logger.warning(
-                            f"DETERMINISTIC_ERRORS DISABLED — exception details sent to LLM. "
-                            f"tool={tool_name} error={str(e)[:100]}"
-                        )
-
-                    tool_calls.append({
-                        "tool": tool_name,
-                        "arguments": tool_args,
-                        "error": str(e) if not deterministic_errors_enabled else "Access denied",
-                    })
-
-                    self.debug_logger.log_error({
-                        "tool": tool_name,
-                        "error": str(e),
-                    })
-
-                    function_responses.append(types.Part(
-                        function_response=types.FunctionResponse(
-                            name=tool_name,
-                            response={"error": error_msg}
-                        )
-                    ))
-
-            # Add function responses to contents
-            gemini_contents.append(
-                types.Content(role="user", parts=function_responses)
+        if session is None:
+            session = await self._session_service.create_session(
+                app_name="health_advisor",
+                user_id=user_id,
+                session_id=session_id,
             )
+            logger.info(f"ADK_SESSION_CREATED user_id={user_id} session_id={session_id}")
+        else:
+            logger.info(f"ADK_SESSION_REUSED user_id={user_id} session_id={session_id}")
 
-            # Get system prompt for continuation (re-read level in case it changed)
-            system_prompt = self._get_system_prompt(patient_id, patient_name)
+        # Create user message content
+        user_content = genai_types.Content(
+            role="user",
+            parts=[genai_types.Part(text=message)]
+        )
 
-            # Continue the conversation with tool results
-            self.debug_logger.log_claude_request({
-                "model": self.model,
-                "continuation": True,
-                "system_prompt_level": get_system_prompt_level(),
-                "tool_results_count": len(function_responses),
-                "request_id": auth.request_id if auth else None,
-                "sub": auth.sub if auth else None,
-            })
+        # Run the agent
+        final_response = ""
+        try:
+            async for event in self._runner.run_async(
+                new_message=user_content,
+                user_id=user_id,
+                session_id=session_id,
+            ):
+                # Track token usage if available
+                if hasattr(event, 'usage_metadata') and event.usage_metadata:
+                    self._total_input_tokens += getattr(event.usage_metadata, 'prompt_token_count', 0) or 0
+                    self._total_output_tokens += getattr(event.usage_metadata, 'candidates_token_count', 0) or 0
 
-            try:
-                response = await self.client.aio.models.generate_content(
-                    model=self.model,
-                    contents=gemini_contents,
-                    config=types.GenerateContentConfig(
-                        system_instruction=system_prompt,
-                        tools=gemini_tools,
-                        max_output_tokens=self.max_output_tokens,
-                        temperature=self.temperature,
-                    )
-                )
-            except Exception as e:
-                logger.error(f"AGENT_GEMINI_ERROR continuation call failed: {e}")
-                raise
+                # Check for final response
+                if event.is_final_response():
+                    if event.content and event.content.parts:
+                        for part in event.content.parts:
+                            if hasattr(part, 'text') and part.text:
+                                final_response += part.text
+                    break
 
-            self.debug_logger.log_claude_response({
-                "finish_reason": response.candidates[0].finish_reason if response.candidates else "no_candidates",
-                "parts_count": len(response.candidates[0].content.parts) if response.candidates else 0,
-            })
+        except Exception as e:
+            logger.error(f"ADK_RUNNER_ERROR user_id={user_id} error={e}")
+            raise
+
+        # Log response
+        self.debug_logger.log_claude_response({
+            "response_length": len(final_response),
+            "tool_calls_count": len(self._current_tool_calls),
+        })
+
+        logger.info(
+            f"ADK_RESPONSE_COMPLETE user_id={user_id} length={len(final_response)} "
+            f"tool_calls={len(self._current_tool_calls)}"
+        )
 
         return {
-            "response": final_text,
-            "tool_calls": tool_calls,
+            "response": final_response,
+            "tool_calls": self._current_tool_calls,
             "usage": {
-                "input_tokens": total_input_tokens,
-                "output_tokens": total_output_tokens,
+                "input_tokens": self._total_input_tokens,
+                "output_tokens": self._total_output_tokens,
             },
         }
