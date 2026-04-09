@@ -26,6 +26,7 @@ from google.adk.sessions import InMemorySessionService
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
+from google.api_core.client_options import ClientOptions
 
 from backend.config import (
     get_config,
@@ -184,6 +185,184 @@ def _is_authorization_error(result_text: str) -> bool:
 
 
 # ============================================================================
+# Model Armor Guard
+# ============================================================================
+
+class ModelArmorGuard:
+    """
+    Bidirectional Model Armor content filter for the Health Advisor agent.
+
+    Scans user input before it reaches Gemini (before_model_callback) and
+    scans agent output before it reaches the user (after_model_callback).
+
+    Only active when prompt_injection_protection security control is enabled.
+    Fails open if the Model Armor service is unavailable.
+    """
+
+    def __init__(self, template_name: str, location: str = "us-central1"):
+        self.template_name = template_name
+        self.location = location
+        self._client = None
+        logger.info(
+            f"MODEL_ARMOR_GUARD initialized "
+            f"template={template_name} location={location}"
+        )
+
+    def _get_client(self):
+        """Lazy-initialize the Model Armor client."""
+        if self._client is None:
+            from google.cloud import modelarmor_v1
+            endpoint = f"modelarmor.{self.location}.rep.googleapis.com"
+            self._client = modelarmor_v1.ModelArmorClient(
+                client_options=ClientOptions(api_endpoint=endpoint)
+            )
+        return self._client
+
+    def _is_blocked(self, result) -> bool:
+        """Return True if any filter matched (MATCH_FOUND = 2)."""
+        try:
+            return int(result.sanitization_result.filter_match_state) == 2
+        except Exception:
+            return False
+
+    def _get_matched_filters(self, result) -> list[str]:
+        """Extract which filters triggered for logging."""
+        filters = []
+        try:
+            r = result.sanitization_result
+            if hasattr(r, "filter_results"):
+                for name, fr in r.filter_results.items():
+                    if hasattr(fr, "match_state") and int(fr.match_state) == 2:
+                        filters.append(name)
+        except Exception:
+            pass
+        return filters
+
+    def _block_message(self, matched_filters: list[str]) -> str:
+        """Return a user-friendly message based on which filter fired."""
+        filters_str = str(matched_filters)
+        if "pi_and_jailbreak" in filters_str:
+            return (
+                "I'm unable to process that request. It appears to contain "
+                "instructions that conflict with my security guidelines. "
+                "Please rephrase your question."
+            )
+        if "sdp" in filters_str:
+            return (
+                "I noticed your message contains sensitive personal information. "
+                "For your security, please remove any SSNs, credit card numbers, "
+                "or similar data and try again."
+            )
+        return (
+            "I'm unable to process that request due to security policy. "
+            "Please rephrase your question."
+        )
+
+    def before_model_callback(
+        self,
+        callback_context: CallbackContext,
+        llm_request: LlmRequest,
+    ) -> Optional[LlmResponse]:
+        """Scan user input before it reaches Gemini."""
+        if not is_security_control_enabled("prompt_injection_protection"):
+            return None
+
+        user_text = ""
+        try:
+            for content in (llm_request.contents or []):
+                if content.role == "user":
+                    for part in (content.parts or []):
+                        if hasattr(part, "text") and part.text:
+                            user_text += part.text
+        except Exception as e:
+            logger.warning(f"MODEL_ARMOR_INPUT extract error: {e}")
+            return None
+
+        if not user_text:
+            return None
+
+        try:
+            from google.cloud import modelarmor_v1
+            client = self._get_client()
+            request = modelarmor_v1.SanitizeUserPromptRequest(
+                name=self.template_name,
+                user_prompt_data=modelarmor_v1.DataItem(text=user_text),
+            )
+            result = client.sanitize_user_prompt(request=request)
+
+            if self._is_blocked(result):
+                matched = self._get_matched_filters(result)
+                logger.warning(
+                    f"MODEL_ARMOR_INPUT_BLOCKED filters={matched} "
+                    f"text_preview={user_text[:100]}"
+                )
+                return LlmResponse(
+                    content=genai_types.Content(
+                        role="model",
+                        parts=[genai_types.Part(text=self._block_message(matched))],
+                    )
+                )
+
+            logger.debug("MODEL_ARMOR_INPUT_ALLOWED")
+            return None
+
+        except Exception as e:
+            logger.warning(f"MODEL_ARMOR_INPUT_ERROR failing open: {e}")
+            return None
+
+    def after_model_callback(
+        self,
+        callback_context: CallbackContext,
+        llm_response: LlmResponse,
+    ) -> Optional[LlmResponse]:
+        """Scan agent output before it reaches the user."""
+        if not is_security_control_enabled("prompt_injection_protection"):
+            return None
+
+        model_text = ""
+        try:
+            if llm_response.content and llm_response.content.parts:
+                for part in llm_response.content.parts:
+                    if hasattr(part, "text") and part.text:
+                        model_text += part.text
+        except Exception as e:
+            logger.warning(f"MODEL_ARMOR_OUTPUT extract error: {e}")
+            return None
+
+        if not model_text:
+            return None
+
+        try:
+            from google.cloud import modelarmor_v1
+            client = self._get_client()
+            request = modelarmor_v1.SanitizeModelResponseRequest(
+                name=self.template_name,
+                model_response_data=modelarmor_v1.DataItem(text=model_text),
+            )
+            result = client.sanitize_model_response(request=request)
+
+            if self._is_blocked(result):
+                matched = self._get_matched_filters(result)
+                logger.warning(
+                    f"MODEL_ARMOR_OUTPUT_BLOCKED filters={matched} "
+                    f"text_preview={model_text[:100]}"
+                )
+                return LlmResponse(
+                    content=genai_types.Content(
+                        role="model",
+                        parts=[genai_types.Part(text=self._block_message(matched))],
+                    )
+                )
+
+            logger.debug("MODEL_ARMOR_OUTPUT_ALLOWED")
+            return None
+
+        except Exception as e:
+            logger.warning(f"MODEL_ARMOR_OUTPUT_ERROR failing open: {e}")
+            return None
+
+
+# ============================================================================
 # ADK Health Advisor Agent
 # ============================================================================
 
@@ -229,6 +408,21 @@ class HealthAdvisorAgent:
         ai_config = self.config.get("ai", {})
         self._model = ai_config.get("model", MODEL)
 
+        # Model Armor guard (optional — requires MODEL_ARMOR_TEMPLATE env var)
+        template_name = os.environ.get("MODEL_ARMOR_TEMPLATE")
+        if template_name:
+            self._model_armor_guard: Optional[ModelArmorGuard] = ModelArmorGuard(
+                template_name=template_name,
+                location=os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1"),
+            )
+            logger.info("MODEL_ARMOR_GUARD attached to agent")
+        else:
+            self._model_armor_guard = None
+            logger.warning(
+                "MODEL_ARMOR_TEMPLATE not set — "
+                "prompt injection protection unavailable"
+            )
+
         # Initialize the agent
         self._initialize_agent()
 
@@ -242,6 +436,27 @@ class HealthAdvisorAgent:
         # Create tool wrappers for MCP tools
         tools = self._create_tool_wrappers()
 
+        # Build the before_model_callback chain.
+        # The deterministic error check always runs first; if Model Armor is
+        # available it runs second so both defenses are active simultaneously.
+        if self._model_armor_guard is not None:
+            _guard = self._model_armor_guard
+
+            def _combined_before_callback(
+                callback_context: CallbackContext,
+                llm_request: LlmRequest,
+            ) -> Optional[LlmResponse]:
+                result = self._before_model_callback(callback_context, llm_request)
+                if result is not None:
+                    return result
+                return _guard.before_model_callback(callback_context, llm_request)
+
+            before_cb = _combined_before_callback
+            after_cb = _guard.after_model_callback
+        else:
+            before_cb = self._before_model_callback
+            after_cb = None
+
         # Create the LlmAgent with a placeholder instruction
         # The real instruction is set per-request in chat()
         self._agent = LlmAgent(
@@ -249,7 +464,8 @@ class HealthAdvisorAgent:
             model=self._model,
             instruction="You are a healthcare assistant.",  # Overridden per-request
             tools=tools,
-            before_model_callback=self._before_model_callback,
+            before_model_callback=before_cb,
+            after_model_callback=after_cb,
         )
 
         # Create the Runner

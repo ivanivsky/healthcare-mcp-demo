@@ -35,3 +35,6 @@ itsdangerous==2.2.0
 
 # Firebase Admin SDK (for ID token verification)
 firebase-admin==6.5.0
+
+# Model Armor (bidirectional content filtering / prompt injection protection)
+google-cloud-modelarmor>=0.1.0

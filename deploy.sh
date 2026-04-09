@@ -102,7 +102,7 @@ deploy_backend() {
         --add-cloudsql-instances ${PROJECT_ID}:${REGION}:healthcare-demo-db \
         --set-env-vars "BACKEND_HOST=0.0.0.0,BACKEND_PORT=8080,MCP_SERVER_URL=${MCP_SERVER_URL},HTTPS_ONLY=true,DEBUG=false,LOG_LEVEL=INFO,FIREBASE_API_KEY=AIzaSyC9IgURwS2nCxnou6QwW--x07DRTaG63ZY,FIREBASE_AUTH_DOMAIN=healthcare-demo-app.firebaseapp.com,GOOGLE_CLOUD_PROJECT=healthcare-demo-app,GOOGLE_CLOUD_LOCATION=us-central1" \
         --set-env-vars "^|^CORS_ORIGINS=https://ai-wtf.xyz,https://www.ai-wtf.xyz,https://my-health-access-backend-834239374191.us-central1.run.app" \
-        --set-secrets "FIREBASE_PROJECT_ID=firebase-project-id:latest,MCP_INTERNAL_TOKEN=mcp-internal-token:latest,MCP_JWT_SECRET=mcp-jwt-secret:latest,DB_CONNECTION_STRING=db-connection-string:latest"
+        --set-secrets "FIREBASE_PROJECT_ID=firebase-project-id:latest,MCP_INTERNAL_TOKEN=mcp-internal-token:latest,MCP_JWT_SECRET=mcp-jwt-secret:latest,DB_CONNECTION_STRING=db-connection-string:latest,MODEL_ARMOR_TEMPLATE=model-armor-template:latest"
 
     # Get the backend URL
     BACKEND_URL=$(gcloud run services describe ${BACKEND_SERVICE} \

@@ -82,9 +82,10 @@ security:
   # Demonstrates: lack of message integrity / claim forgery attack vector.
   mcp_auth_context_signing_required: true
 
-  # Controls whether user input is scanned for prompt injection patterns.
-  # When false: raw user input is sent directly to Claude without scanning.
-  # Demonstrates: prompt injection attack vector.
+  # Controls whether Model Armor scans user input and agent responses for
+  # prompt injection patterns, sensitive data, and harmful content.
+  # When false: raw input/output bypasses content scanning entirely.
+  # Demonstrates: prompt injection / indirect injection attack vector.
   prompt_injection_protection: true
 
   # System prompt security level.
@@ -111,6 +112,12 @@ security:
   rate_limiting:
     enabled: true
     requests_per_minute: 60
+
+# Model Armor Configuration
+# Template name is loaded from MODEL_ARMOR_TEMPLATE env var (required for the feature to activate).
+# The prompt_injection_protection security toggle above controls whether scanning runs at runtime.
+model_armor:
+  location: "us-central1"  # Regional endpoint for the Model Armor API
 
 # Logging & Observability
 logging:

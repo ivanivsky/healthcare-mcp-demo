@@ -210,14 +210,21 @@
                     <div class="control-status" id="status-deterministic_error_responses"></div>
                 </div>
 
-                <div class="control-card control-card-coming-soon" id="card-prompt_injection_protection">
+                <div class="control-card" id="card-prompt_injection_protection">
                     <div class="control-header">
                         <div class="control-title">Prompt Injection Protection</div>
-                        <span class="coming-soon-badge">Coming Soon</span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="toggle-prompt_injection_protection" data-control="prompt_injection_protection">
+                            <span class="toggle-slider"></span>
+                        </label>
                     </div>
                     <div class="control-description">
-                        Scans user input for injection patterns before sending to the agent. Coming in a future update.
+                        Bidirectional content filtering via Google Cloud Model Armor. Scans user input before it reaches the agent (input shield) and scans agent responses before they reach the user (output shield). When OFF: raw input and output bypass content scanning.
                     </div>
+                    <div class="control-attack-vector">
+                        <span class="attack-label">Attack vector:</span> Prompt injection, jailbreaks, sensitive data exfiltration
+                    </div>
+                    <div class="control-status" id="status-prompt_injection_protection"></div>
                 </div>
             </section>
 

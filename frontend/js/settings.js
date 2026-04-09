@@ -17,7 +17,8 @@ const BOOLEAN_CONTROLS = [
     'authorization_required',
     'mcp_transport_auth_required',
     'mcp_auth_context_signing_required',
-    'deterministic_error_responses'
+    'deterministic_error_responses',
+    'prompt_injection_protection'
 ];
 
 // Human-readable control names for display
@@ -26,7 +27,8 @@ const CONTROL_NAMES = {
     'authorization_required': 'Authorization',
     'mcp_transport_auth_required': 'MCP Transport Auth',
     'mcp_auth_context_signing_required': 'Auth Context Signing',
-    'deterministic_error_responses': 'Deterministic Errors'
+    'deterministic_error_responses': 'Deterministic Errors',
+    'prompt_injection_protection': 'Prompt Injection'
 };
 
 // ============================================================================
@@ -118,6 +120,7 @@ async function handleAuthStateChange(user) {
         isReadOnly = false;
         await loadSecurityConfig();
         showSettingsContent();
+        renderControls();
 
     } catch (error) {
         console.error('[Settings] Error checking user role:', error);
