@@ -12,12 +12,18 @@ app:
   url: "https://ai-wtf.xyz"
   admin_contact: "admin@ai-wtf.xyz"
 
-# MCP Server Configuration
+# MCP Server Configuration (Health — port 8001)
 mcp:
   transport: "sse"  # Options: stdio, sse, http
   host: "localhost"
   port: 8001
   server_url: "http://localhost:8001/sse"  # Overridden by MCP_SERVER_URL env var in Cloud Run
+
+# Appointments MCP Server Configuration (port 8002)
+# Exposes scheduling tools only — no patient health data.
+# Overridden by APPOINTMENTS_MCP_URL env var in Cloud Run.
+appointments_mcp:
+  url: "http://localhost:8002/sse"
 
 # Backend API Configuration
 backend:

@@ -206,6 +206,10 @@ async def lifespan(app: FastAPI):
         await seed_providers()
         slots = await seed_available_slots()
         await seed_appointment_requests(slots)
+        for table in ("providers", "available_slots", "appointment_requests"):
+            await db.execute(
+                f"SELECT setval('{table}_id_seq', (SELECT MAX(id) FROM {table}))"
+            )
         await verify_appointments_schema()
     except Exception as e:
         logger.error(f"Database initialization failed: {e}")

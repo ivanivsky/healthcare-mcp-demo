@@ -519,6 +519,7 @@ async def seed_appointment_requests(slots: list):
         request_id += 1
 
 
+
 async def verify_appointments_schema():
     """Log counts for all scheduling tables — called from lifespan startup."""
     pool = await db.get_pool()
@@ -578,6 +579,17 @@ async def main():
 
     print("Seeding appointment requests for booked slots...")
     await seed_appointment_requests(slots)
+
+    # Sync SERIAL sequences with the highest explicitly-inserted ids.
+    # Seed functions insert rows with explicit ids (for idempotency via
+    # ON CONFLICT DO NOTHING), which bypasses the SERIAL auto-increment.
+    # Without this reset, nextval() returns 1 on the first runtime INSERT
+    # and collides with seeded row id=1.
+    print("Resetting SERIAL sequences...")
+    for table in ("providers", "available_slots", "appointment_requests"):
+        await db.execute(
+            f"SELECT setval('{table}_id_seq', (SELECT MAX(id) FROM {table}))"
+        )
 
     # Report final state
     patient_count = await db.fetchval("SELECT COUNT(*) FROM patients")
