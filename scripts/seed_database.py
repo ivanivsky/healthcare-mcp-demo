@@ -10,14 +10,18 @@ Seed database with fake patient data for Health Advisor demo.
 """
 
 import asyncio
+import logging
+import random
 import sys
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
-from datetime import date, datetime
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from backend import db
+
+logger = logging.getLogger(__name__)
 
 
 async def init_database():
@@ -128,6 +132,50 @@ async def init_database():
             status TEXT DEFAULT 'normal',
             ordering_provider TEXT,
             lab_name TEXT,
+            notes TEXT
+        )
+    """)
+
+    # ── Appointments Agent tables (scheduling layer) ──────────────────────────
+    # These tables are used exclusively by the Appointments MCP server and
+    # Appointments Agent. The Health Agent does NOT have access to these tables.
+
+    # Providers: doctors and healthcare providers patients can schedule with
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS providers (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL,
+            specialty TEXT NOT NULL,
+            location TEXT NOT NULL,
+            phone TEXT,
+            accepting_new_patients BOOLEAN DEFAULT TRUE
+        )
+    """)
+
+    # Available slots: pre-generated appointment slots per provider
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS available_slots (
+            id SERIAL PRIMARY KEY,
+            provider_id INTEGER NOT NULL REFERENCES providers(id),
+            slot_date DATE NOT NULL,
+            slot_time TIME NOT NULL,
+            duration_minutes INTEGER DEFAULT 30,
+            status TEXT DEFAULT 'available',
+            patient_id INTEGER REFERENCES patients(id)
+        )
+    """)
+
+    # Appointment requests: log of scheduling requests made through the agent
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS appointment_requests (
+            id SERIAL PRIMARY KEY,
+            patient_id INTEGER NOT NULL REFERENCES patients(id),
+            provider_id INTEGER REFERENCES providers(id),
+            requested_at TIMESTAMPTZ DEFAULT NOW(),
+            requested_date DATE,
+            reason TEXT,
+            status TEXT DEFAULT 'pending',
+            slot_id INTEGER REFERENCES available_slots(id),
             notes TEXT
         )
     """)
@@ -373,6 +421,123 @@ async def seed_lab_results():
         """, *lab)
 
 
+async def seed_providers():
+    """Seed healthcare providers. Idempotent — uses ON CONFLICT DO NOTHING."""
+    providers = [
+        (1, "Dr. Sarah Kim",        "Internal Medicine", "UCSF Medical Center, San Francisco, CA",       "(415) 555-0101", True),
+        (2, "Dr. James Okonkwo",    "Cardiology",        "Stanford Medical Center, Palo Alto, CA",        "(650) 555-0102", True),
+        (3, "Dr. Maria Santos",     "Endocrinology",     "SF General Hospital, San Francisco, CA",        "(415) 555-0103", True),
+        (4, "Dr. David Chen",       "Neurology",         "UCSF Medical Center, San Francisco, CA",        "(415) 555-0104", False),
+        (5, "Dr. Emily Rodriguez",  "Primary Care",      "Mission Health Clinic, San Francisco, CA",      "(415) 555-0105", True),
+    ]
+    for p in providers:
+        await db.execute("""
+            INSERT INTO providers (id, name, specialty, location, phone, accepting_new_patients)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (id) DO NOTHING
+        """, *p)
+
+
+async def seed_available_slots():
+    """
+    Seed appointment slots for all 5 providers over 6 weeks.
+
+    Reference date: 2026-05-01 (deterministic — not tied to run date).
+    Slots are generated for weekdays only at 09:00, 10:00, 11:00, 14:00, 15:00, 16:00.
+    ~30% of slots are pre-booked (random.seed(42) for reproducibility).
+
+    Per provider: 30 weekdays × 6 slots = 180 slots
+    Total: 5 providers × 180 = 900 slots
+    """
+    seed_start = date(2026, 5, 1)
+    slot_times = [time(9, 0), time(10, 0), time(11, 0), time(14, 0), time(15, 0), time(16,0)]
+    num_weeks = 6
+    patient_ids = [1, 2, 3, 4, 5]
+
+    rng = random.Random(42)
+
+    # Build the full slot list in Python so we can assign consistent IDs
+    slots = []  # (id, provider_id, slot_date, slot_time, status, patient_id)
+    slot_id = 1
+
+    for provider_id in range(1, 6):
+        days_generated = 0
+        current_day = seed_start
+        while days_generated < num_weeks * 7:
+            if current_day.weekday() < 5:  # Monday=0 … Friday=4
+                for t in slot_times:
+                    booked = rng.random() < 0.30
+                    if booked:
+                        pid = rng.choice(patient_ids)
+                        slots.append((slot_id, provider_id, current_day, t, "booked", pid))
+                    else:
+                        slots.append((slot_id, provider_id, current_day, t, "available", None))
+                    slot_id += 1
+            current_day += timedelta(days=1)
+            days_generated += 1
+
+    for s in slots:
+        await db.execute("""
+            INSERT INTO available_slots
+                (id, provider_id, slot_date, slot_time, duration_minutes, status, patient_id)
+            VALUES ($1, $2, $3, $4::time, 30, $5, $6)
+            ON CONFLICT (id) DO NOTHING
+        """, s[0], s[1], s[2], s[3], s[4], s[5])
+
+    return slots  # return for use by seed_appointment_requests
+
+
+async def seed_appointment_requests(slots: list):
+    """
+    Seed appointment_requests for every pre-booked slot.
+    Idempotent — uses ON CONFLICT DO NOTHING.
+    """
+    # Reasons by provider_id (mapped from specialty)
+    reasons_by_provider = {
+        1: ["Annual physical", "Follow-up visit", "Chronic condition management"],           # Internal Medicine
+        2: ["Cardiac follow-up", "EKG review", "Blood pressure management"],                 # Cardiology
+        3: ["Diabetes management", "Thyroid follow-up", "Hormone level review"],             # Endocrinology
+        4: ["Headache evaluation", "Neurological follow-up"],                                # Neurology
+        5: ["Wellness visit", "Sick visit", "Vaccination"],                                  # Primary Care
+    }
+
+    rng = random.Random(42)
+    request_id = 1
+
+    for slot in slots:
+        slot_id, provider_id, slot_date, slot_time, status, patient_id = slot
+        if status != "booked":
+            continue
+
+        reason = rng.choice(reasons_by_provider[provider_id])
+        await db.execute("""
+            INSERT INTO appointment_requests
+                (id, patient_id, provider_id, requested_date, reason, status, slot_id)
+            VALUES ($1, $2, $3, $4, $5, 'confirmed', $6)
+            ON CONFLICT (id) DO NOTHING
+        """, request_id, patient_id, provider_id, slot_date, reason, slot_id)
+        request_id += 1
+
+
+async def verify_appointments_schema():
+    """Log counts for all scheduling tables — called from lifespan startup."""
+    pool = await db.get_pool()
+    async with pool.acquire() as conn:
+        providers = await conn.fetchval("SELECT COUNT(*) FROM providers")
+        slots = await conn.fetchval("SELECT COUNT(*) FROM available_slots")
+        booked = await conn.fetchval(
+            "SELECT COUNT(*) FROM available_slots WHERE status='booked'"
+        )
+        requests = await conn.fetchval("SELECT COUNT(*) FROM appointment_requests")
+        logger.info(
+            f"APPOINTMENTS_SCHEMA_VERIFIED "
+            f"providers={providers} "
+            f"total_slots={slots} "
+            f"booked_slots={booked} "
+            f"requests={requests}"
+        )
+
+
 async def main():
     """
     Initialize and seed the database.
@@ -405,9 +570,27 @@ async def main():
     print("Seeding lab results...")
     await seed_lab_results()
 
+    print("Seeding providers...")
+    await seed_providers()
+
+    print("Seeding available slots (~900 total, ~30% booked)...")
+    slots = await seed_available_slots()
+
+    print("Seeding appointment requests for booked slots...")
+    await seed_appointment_requests(slots)
+
     # Report final state
-    count = await db.fetchval("SELECT COUNT(*) FROM patients")
-    print(f"\nDatabase ready with {count} patients.")
+    patient_count = await db.fetchval("SELECT COUNT(*) FROM patients")
+    provider_count = await db.fetchval("SELECT COUNT(*) FROM providers")
+    slot_count = await db.fetchval("SELECT COUNT(*) FROM available_slots")
+    booked_count = await db.fetchval("SELECT COUNT(*) FROM available_slots WHERE status='booked'")
+    request_count = await db.fetchval("SELECT COUNT(*) FROM appointment_requests")
+    print(f"\nDatabase ready:")
+    print(f"  patients:              {patient_count}")
+    print(f"  providers:             {provider_count}")
+    print(f"  available_slots total: {slot_count}")
+    print(f"  available_slots booked:{booked_count}")
+    print(f"  appointment_requests:  {request_count}")
 
     await db.close_pool()
 

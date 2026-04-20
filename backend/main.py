@@ -182,7 +182,13 @@ async def lifespan(app: FastAPI):
     # On Cloud Run, containers are stateless so this runs every time.
     # The seed data is idempotent — same patients, same data, every time.
     try:
-        from scripts.seed_database import init_database as init_schema, seed_patients, seed_medical_records, seed_prescriptions, seed_appointments, seed_insurance, seed_lab_results
+        from scripts.seed_database import (
+            init_database as init_schema,
+            seed_patients, seed_medical_records, seed_prescriptions,
+            seed_appointments, seed_insurance, seed_lab_results,
+            seed_providers, seed_available_slots, seed_appointment_requests,
+            verify_appointments_schema,
+        )
         logger.info("Initializing PostgreSQL connection pool...")
         await db.init_pool()
         logger.info("Creating database schema...")
@@ -196,6 +202,11 @@ async def lifespan(app: FastAPI):
         await seed_lab_results()
         patient_count = await db.fetchval("SELECT COUNT(*) FROM patients")
         logger.info(f"Patient database ready with {patient_count} patients.")
+        logger.info("Seeding appointments scheduling tables...")
+        await seed_providers()
+        slots = await seed_available_slots()
+        await seed_appointment_requests(slots)
+        await verify_appointments_schema()
     except Exception as e:
         logger.error(f"Database initialization failed: {e}")
         raise
