@@ -118,6 +118,7 @@ def update_security_config(updates: dict) -> dict:
         "prompt_injection_protection",
         "system_prompt_level",
         "deterministic_error_responses",
+        "grounding_strictness",
     }
 
     for key, value in updates.items():
@@ -158,6 +159,22 @@ def is_security_control_enabled(control: str) -> bool:
     """
     security_config = get_security_config()
     return security_config.get(control, False)
+
+
+def get_grounding_strictness() -> str:
+    """
+    Get the current grounding strictness level.
+
+    Returns:
+        "strict" | "moderate" | "loose"
+        Defaults to "strict" if not set or invalid.
+    """
+    security_config = get_security_config()
+    level = security_config.get("grounding_strictness", "strict")
+    if level not in ("strict", "moderate", "loose"):
+        logger.warning(f"Invalid grounding_strictness '{level}', defaulting to 'strict'")
+        return "strict"
+    return level
 
 
 def get_system_prompt_level() -> str:

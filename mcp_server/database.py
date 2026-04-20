@@ -28,7 +28,11 @@ async def init_database():
 async def get_patient_by_id(patient_id: int) -> Optional[dict]:
     """Get patient demographics by ID."""
     row = await db.fetchrow(
-        "SELECT * FROM patients WHERE id = $1", patient_id
+        """SELECT id, first_name, last_name, date_of_birth, gender,
+                  address, city, state, zip_code, phone, email, member_id,
+                  specialist_referral, care_coordinator, created_at
+           FROM patients WHERE id = $1""",
+        patient_id
     )
     return dict(row) if row else None
 

@@ -319,8 +319,9 @@ class SecurityConfigUpdate(BaseModel):
     mcp_transport_auth_required: bool | None = None
     mcp_auth_context_signing_required: bool | None = None
     prompt_injection_protection: bool | None = None
-    system_prompt_level: str | None = None      
+    system_prompt_level: str | None = None
     deterministic_error_responses: bool | None = None
+    grounding_strictness: str | None = None
 
 
 class SecurityConfigResponse(BaseModel):
@@ -1311,7 +1312,8 @@ async def update_security_config_endpoint(
         "mcp_auth_context_signing_required",
         "prompt_injection_protection",
         "system_prompt_level",
-        "deterministic_error_responses"
+        "deterministic_error_responses",
+        "grounding_strictness",
     ]:
         value = getattr(body, field)
         if value is not None:
@@ -1625,6 +1627,24 @@ async def serve_learn():
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Learn - My Health Access</title>
     <link rel="stylesheet" href="/static/css/styles.css">
+    <style>
+        .lesson { background: var(--card-bg, #fff); border: 1px solid var(--border, #e2e8f0); border-radius: 12px; padding: 28px 32px; margin-bottom: 28px; }
+        .lesson-number { font-size: 0.78rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent, #3b82f6); margin-bottom: 6px; }
+        .lesson h2 { margin: 0 0 10px; font-size: 1.25rem; }
+        .lesson-summary { color: var(--text-secondary, #64748b); margin-bottom: 20px; line-height: 1.6; }
+        .lesson-steps { list-style: none; padding: 0; margin: 0 0 20px; counter-reset: step; }
+        .lesson-steps li { counter-increment: step; display: flex; gap: 14px; margin-bottom: 14px; }
+        .lesson-steps li::before { content: counter(step); flex-shrink: 0; width: 26px; height: 26px; border-radius: 50%; background: var(--accent, #3b82f6); color: #fff; font-size: 0.8rem; font-weight: 700; display: flex; align-items: center; justify-content: center; margin-top: 1px; }
+        .step-body strong { display: block; margin-bottom: 4px; }
+        .step-body p { margin: 0; color: var(--text-secondary, #64748b); line-height: 1.55; font-size: 0.92rem; }
+        .step-body code { background: var(--code-bg, #f1f5f9); border-radius: 4px; padding: 1px 5px; font-size: 0.88em; }
+        .lesson-insight { background: var(--insight-bg, #eff6ff); border-left: 3px solid var(--accent, #3b82f6); border-radius: 0 6px 6px 0; padding: 12px 16px; font-size: 0.92rem; line-height: 1.55; }
+        .lesson-insight strong { display: block; margin-bottom: 4px; }
+        .learn-actions { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 20px; }
+        .learn-btn { display: inline-block; padding: 9px 18px; border-radius: 8px; font-size: 0.9rem; font-weight: 600; text-decoration: none; }
+        .learn-btn-primary { background: var(--accent, #3b82f6); color: #fff; }
+        .learn-btn-secondary { background: var(--card-bg, #fff); color: var(--text, #1e293b); border: 1px solid var(--border, #e2e8f0); }
+    </style>
 </head>
 <body>
     <div class="learn-container">
@@ -1638,20 +1658,79 @@ async def serve_learn():
             </nav>
         </header>
         <main class="learn-content">
-            <div class="learn-card">
-                <div class="learn-icon">📚</div>
-                <h2>Coming Soon</h2>
-                <p>
-                    Security scenario walkthroughs are coming soon.
-                    This section will contain guided exercises for exploring
-                    authentication, authorization, prompt injection, and other
-                    AI security topics.
+
+            <div class="lesson">
+                <div class="lesson-number">Lesson 1</div>
+                <h2>Broken Object-Level Authorization (BOLA)</h2>
+                <p class="lesson-summary">
+                    When authorization is disabled, the agent calls MCP tools with any <code>patient_id</code> the user requests — not just the one they are authenticated for. This is the most common API vulnerability in healthcare systems.
                 </p>
-                <div class="learn-links">
-                    <a href="/" class="learn-link">Back to App</a>
-                    <a href="/settings" class="learn-link">Security Settings</a>
+                <ol class="lesson-steps">
+                    <li>
+                        <div class="step-body">
+                            <strong>Go to Settings and disable Authorization.</strong>
+                            <p>Turn off the <em>Authorization</em> toggle. The MCP server will stop checking whether your <code>patient_id</code> claim matches the tool argument.</p>
+                        </div>
+                    </li>
+                    <li>
+                        <div class="step-body">
+                            <strong>Ask the agent about a different patient.</strong>
+                            <p>In the chat, type: <code>Show me the prescriptions for patient 2</code>. Watch the Debug panel — the tool call uses <code>patient_id=2</code> and the MCP server returns data without rejecting the request.</p>
+                        </div>
+                    </li>
+                    <li>
+                        <div class="step-body">
+                            <strong>Re-enable Authorization and repeat.</strong>
+                            <p>The MCP server now checks your JWT claims. The same request returns a <code>403 Forbidden</code> error and no data is disclosed.</p>
+                        </div>
+                    </li>
+                </ol>
+                <div class="lesson-insight">
+                    <strong>Key takeaway</strong>
+                    Authorization must be enforced server-side on every tool call, not just at the UI layer. The agent itself cannot be trusted to enforce data boundaries.
+                </div>
+                <div class="learn-actions">
+                    <a href="/settings" class="learn-btn learn-btn-primary">Open Settings</a>
+                    <a href="/" class="learn-btn learn-btn-secondary">Open Chat</a>
                 </div>
             </div>
+
+            <div class="lesson">
+                <div class="lesson-number">Lesson 2</div>
+                <h2>Hallucination Risk in Healthcare AI</h2>
+                <p class="lesson-summary">
+                    At high temperature with no grounding guidance, LLMs will invent plausible-sounding values for fields that are null in the database. In a healthcare context, a hallucinated specialist name or care coordinator could cause real patient harm.
+                </p>
+                <ol class="lesson-steps">
+                    <li>
+                        <div class="step-body">
+                            <strong>Go to Settings → Agent Behavior → Grounding Strictness and set it to Loose.</strong>
+                            <p>This sets temperature to 0.9 and removes all grounding instructions from the system prompt. The agent is now free to fill in gaps using its training knowledge.</p>
+                        </div>
+                    </li>
+                    <li>
+                        <div class="step-body">
+                            <strong>Ask the agent about a specialist referral or care coordinator.</strong>
+                            <p>Try: <code>Do I have a specialist referral on file?</code> or <code>Who is my care coordinator?</code>. These fields are intentionally null in the database. Observe whether the agent says "not on file" or invents a name and phone number.</p>
+                        </div>
+                    </li>
+                    <li>
+                        <div class="step-body">
+                            <strong>Switch Grounding Strictness to Strict and repeat the question.</strong>
+                            <p>Temperature drops to 0.0 and the system prompt now includes explicit rules against inferring absent fields. The agent should now say the information is not available rather than fabricating it.</p>
+                        </div>
+                    </li>
+                </ol>
+                <div class="lesson-insight">
+                    <strong>Key takeaway</strong>
+                    Temperature is a security-relevant parameter, not just a creativity dial. High temperature increases hallucination risk. Explicit grounding rules in the system prompt reduce — but do not eliminate — that risk. For clinical use cases, always validate model output against authoritative data sources.
+                </div>
+                <div class="learn-actions">
+                    <a href="/settings" class="learn-btn learn-btn-primary">Open Settings</a>
+                    <a href="/" class="learn-btn learn-btn-secondary">Open Chat</a>
+                </div>
+            </div>
+
         </main>
     </div>
 </body>

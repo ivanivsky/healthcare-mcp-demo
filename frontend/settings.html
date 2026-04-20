@@ -226,6 +226,36 @@
                     </div>
                     <div class="control-status" id="status-prompt_injection_protection"></div>
                 </div>
+
+                <div class="control-card control-card-radio" id="card-grounding_strictness">
+                    <div class="control-header">
+                        <div class="control-title">Grounding Strictness</div>
+                    </div>
+                    <div class="control-description">
+                        Controls how strictly the agent is constrained to only report data returned by tools. At <strong>Strict</strong>: temperature is 0.0 and explicit rules prevent the agent from inferring or fabricating null fields. At <strong>Loose</strong>: temperature is 0.9 with no grounding guidance — the agent may hallucinate values for missing fields like specialist referrals.
+                    </div>
+                    <div class="radio-group" id="radio-grounding_strictness">
+                        <label class="radio-option">
+                            <input type="radio" name="grounding_strictness" value="loose">
+                            <span class="radio-label">Loose</span>
+                            <span class="radio-description">temperature=0.9, no grounding rules. Agent may hallucinate values for null fields.</span>
+                        </label>
+                        <label class="radio-option">
+                            <input type="radio" name="grounding_strictness" value="moderate">
+                            <span class="radio-label">Moderate</span>
+                            <span class="radio-description">temperature=0.3, soft reminder to stay grounded. Some hallucination risk remains.</span>
+                        </label>
+                        <label class="radio-option">
+                            <input type="radio" name="grounding_strictness" value="strict">
+                            <span class="radio-label">Strict</span>
+                            <span class="radio-description">temperature=0.0, explicit rules against inferring absent fields. Never fabricates data.</span>
+                        </label>
+                    </div>
+                    <div class="control-attack-vector">
+                        <span class="attack-label">Attack vector:</span> Hallucination of medical data (specialist referrals, care coordinators)
+                    </div>
+                    <div class="control-status" id="status-grounding_strictness"></div>
+                </div>
             </section>
 
             <!-- Section 3: Data Controls -->

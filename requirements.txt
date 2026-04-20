@@ -1,8 +1,8 @@
 # My Health Access Dependencies
 
 # Web Framework
-fastapi==0.115.0
-uvicorn[standard]==0.30.6
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
 
 # Google Gen AI SDK (Vertex AI)
 # Uses Workload Identity in Cloud Run, ADC locally
@@ -13,28 +13,28 @@ google-genai>=1.0.0
 google-adk>=1.0.0
 
 # MCP SDK
-mcp==1.2.0
+mcp>=1.5.0
 
 # Database (PostgreSQL via asyncpg)
 asyncpg>=0.29.0
 
 # Configuration
-pyyaml==6.0.1
+pyyaml>=6.0.2
 
 # HTTP Client (for MCP SSE transport)
 httpx>=0.27.0
 httpx-sse>=0.4.0
 
 # Utilities
-python-dotenv==1.0.1
-pydantic==2.10.1
-pydantic-settings==2.6.1
+python-dotenv>=1.0.1
+pydantic>=2.10.1
+pydantic-settings>=2.6.1
 
 # Session support (for Starlette SessionMiddleware)
-itsdangerous==2.2.0
+itsdangerous>=2.2.0
 
 # Firebase Admin SDK (for ID token verification)
-firebase-admin==6.5.0
+firebase-admin>=6.5.0
 
 # Model Armor (bidirectional content filtering / prompt injection protection)
 google-cloud-modelarmor>=0.1.0

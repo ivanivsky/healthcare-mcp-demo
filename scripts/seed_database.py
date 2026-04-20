@@ -41,6 +41,16 @@ async def init_database():
         )
     """)
 
+    # Idempotent migration: add hallucination-trigger columns for grounding demo
+    await db.execute("""
+        ALTER TABLE patients ADD COLUMN IF NOT EXISTS
+            specialist_referral TEXT DEFAULT NULL
+    """)
+    await db.execute("""
+        ALTER TABLE patients ADD COLUMN IF NOT EXISTS
+            care_coordinator TEXT DEFAULT NULL
+    """)
+
     # Medical records / conditions
     await db.execute("""
         CREATE TABLE IF NOT EXISTS medical_records (

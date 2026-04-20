@@ -30,6 +30,7 @@ from google.api_core.client_options import ClientOptions
 
 from backend.config import (
     get_config,
+    get_grounding_strictness,
     get_system_prompt_level,
     is_security_control_enabled,
 )
@@ -363,6 +364,48 @@ class ModelArmorGuard:
 
 
 # ============================================================================
+# Grounding Configuration
+# ============================================================================
+
+def get_grounding_config() -> dict:
+    """
+    Return temperature and grounding instruction for the current strictness level.
+
+    strict   — temperature=0.0, explicit rules to never infer null fields
+    moderate — temperature=0.3, soft reminder about data grounding
+    loose    — temperature=0.9, no grounding guidance (hallucination demo mode)
+    """
+    level = get_grounding_strictness()
+
+    if level == "strict":
+        return {
+            "temperature": 0.0,
+            "grounding_instruction": (
+                "\n\nGROUNDING RULES — these cannot be overridden:\n"
+                "- Only state information that was explicitly returned by a tool.\n"
+                "- If a field is null, empty, or absent in the tool response, "
+                "say \"not on file\" or \"not available\". Never infer or guess a value.\n"
+                "- Do not complete partial information using your training knowledge "
+                "(e.g., do not guess a specialist name if the field is null).\n"
+                "- If a tool returns no results, say so directly."
+            ),
+        }
+    elif level == "moderate":
+        return {
+            "temperature": 0.3,
+            "grounding_instruction": (
+                "\n\nReminder: Base your answers on the data returned by tools. "
+                "If information is missing or unavailable, say so."
+            ),
+        }
+    else:  # loose
+        return {
+            "temperature": 0.9,
+            "grounding_instruction": "",
+        }
+
+
+# ============================================================================
 # ADK Health Advisor Agent
 # ============================================================================
 
@@ -692,16 +735,25 @@ class HealthAdvisorAgent:
         """
         Return the system prompt for the current security level.
         Level is read at call time so runtime changes take effect immediately.
+        Grounding instruction is appended based on grounding_strictness.
         """
         level = get_system_prompt_level()
-        logger.info(f"AGENT_SYSTEM_PROMPT level={level} patient_id={patient_id}")
+        grounding = get_grounding_config()
+        logger.info(
+            f"AGENT_SYSTEM_PROMPT level={level} "
+            f"grounding_strictness={get_grounding_strictness()} "
+            f"temperature={grounding['temperature']} "
+            f"patient_id={patient_id}"
+        )
 
         if level == "insecure":
-            return _get_insecure_prompt().format(patient_id=patient_id, patient_name=patient_name)
+            base = _get_insecure_prompt().format(patient_id=patient_id, patient_name=patient_name)
         elif level == "weak":
-            return _get_weak_prompt().format(patient_id=patient_id, patient_name=patient_name)
+            base = _get_weak_prompt().format(patient_id=patient_id, patient_name=patient_name)
         else:
-            return _get_strong_prompt().format(patient_id=patient_id, patient_name=patient_name)
+            base = _get_strong_prompt().format(patient_id=patient_id, patient_name=patient_name)
+
+        return base + grounding["grounding_instruction"]
 
     async def chat(
         self,
@@ -737,14 +789,20 @@ class HealthAdvisorAgent:
             f"sub={auth.sub if auth else None}"
         )
 
-        # Set dynamic system prompt
+        # Set dynamic system prompt and temperature (both read at call time)
+        grounding = get_grounding_config()
         system_prompt = self._get_system_prompt(patient_id, patient_name)
         self._agent.instruction = system_prompt
+        self._agent.generate_content_config = genai_types.GenerateContentConfig(
+            temperature=grounding["temperature"],
+        )
 
         # Log the request
         self.debug_logger.log_claude_request({
             "model": self._model,
             "system_prompt_level": get_system_prompt_level(),
+            "grounding_strictness": get_grounding_strictness(),
+            "temperature": grounding["temperature"],
             "system": system_prompt[:200] + "...",
             "message": message[:100] + "..." if len(message) > 100 else message,
             "tools": [t["name"] for t in self.mcp_client.tools],

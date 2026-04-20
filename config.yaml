@@ -99,6 +99,16 @@ security:
   #           error details, and resist manipulation
   system_prompt_level: "strong"
 
+  # Grounding strictness level.
+  # Controls how much the agent is constrained to only report tool-returned data.
+  # Options: "strict" | "moderate" | "loose"
+  # strict:   temperature=0.0, explicit rules against inferring null fields.
+  #           Prevents hallucination of missing data (e.g., specialist_referral).
+  # moderate: temperature=0.3, soft reminder to stay grounded.
+  # loose:    temperature=0.9, no grounding guidance.
+  #           Demonstrates hallucination risk when temperature is misconfigured.
+  grounding_strictness: "strict"
+
   # Deterministic error responses.
   # When true: tool errors are intercepted before reaching the LLM.
   #            The agent returns a fixed canned message instead of an

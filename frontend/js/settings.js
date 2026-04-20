@@ -11,7 +11,7 @@ let securityConfig = null;
 let isReadOnly = false;
 let systemPrompts = null;
 
-// Boolean controls to track for posture summary (excludes system_prompt_level)
+// Boolean controls to track for posture summary (excludes radio-group controls)
 const BOOLEAN_CONTROLS = [
     'authentication_required',
     'authorization_required',
@@ -28,7 +28,8 @@ const CONTROL_NAMES = {
     'mcp_transport_auth_required': 'MCP Transport Auth',
     'mcp_auth_context_signing_required': 'Auth Context Signing',
     'deterministic_error_responses': 'Deterministic Errors',
-    'prompt_injection_protection': 'Prompt Injection'
+    'prompt_injection_protection': 'Prompt Injection',
+    'grounding_strictness': 'Grounding Strictness',
 };
 
 // ============================================================================
@@ -328,6 +329,14 @@ function renderControls() {
     });
     updateCardStyling('system_prompt_level', level);
 
+    // Set grounding_strictness radio
+    const groundingLevel = securityConfig.grounding_strictness || 'strict';
+    const groundingRadios = document.querySelectorAll('input[name="grounding_strictness"]');
+    groundingRadios.forEach(input => {
+        input.checked = input.value === groundingLevel;
+    });
+    updateCardStyling('grounding_strictness', groundingLevel);
+
     // Set up event listeners for toggles
     for (const control of BOOLEAN_CONTROLS) {
         const toggle = document.getElementById(`toggle-${control}`);
@@ -350,6 +359,13 @@ function renderControls() {
         });
     });
 
+    // Set up event listener for grounding_strictness radios
+    groundingRadios.forEach(input => {
+        input.addEventListener('change', (e) => {
+            updateSecurityControl('grounding_strictness', e.target.value);
+        });
+    });
+
     // Apply read-only state if needed
     if (isReadOnly) {
         applyReadOnlyState();
@@ -364,6 +380,9 @@ function applyReadOnlyState() {
 
     // Disable all radio inputs
     document.querySelectorAll('input[name="system_prompt_level"]').forEach(input => {
+        input.disabled = true;
+    });
+    document.querySelectorAll('input[name="grounding_strictness"]').forEach(input => {
         input.disabled = true;
     });
 
@@ -387,9 +406,19 @@ function updateCardStyling(controlName, value) {
     card.classList.remove('control-card-enabled', 'control-card-disabled');
 
     if (controlName === 'system_prompt_level') {
-        // For system prompt level, "strong" is enabled, others are various levels of disabled
+        // "strong" is enabled, others are various levels of disabled
         if (value === 'strong') {
             card.classList.add('control-card-enabled');
+        } else {
+            card.classList.add('control-card-disabled');
+        }
+    } else if (controlName === 'grounding_strictness') {
+        // "strict" is secure (green), "moderate" is caution (yellow), "loose" is insecure (red)
+        card.classList.remove('control-card-warning');
+        if (value === 'strict') {
+            card.classList.add('control-card-enabled');
+        } else if (value === 'moderate') {
+            card.classList.add('control-card-warning');
         } else {
             card.classList.add('control-card-disabled');
         }
@@ -408,6 +437,12 @@ function revertControl(controlName) {
         const level = securityConfig.system_prompt_level || 'strong';
         const radioInputs = document.querySelectorAll('input[name="system_prompt_level"]');
         radioInputs.forEach(input => {
+            input.checked = input.value === level;
+        });
+    } else if (controlName === 'grounding_strictness') {
+        const level = securityConfig.grounding_strictness || 'strict';
+        const radios = document.querySelectorAll('input[name="grounding_strictness"]');
+        radios.forEach(input => {
             input.checked = input.value === level;
         });
     } else {
@@ -502,7 +537,15 @@ function updatePostureSummary() {
         }
     }
 
-    const totalCount = BOOLEAN_CONTROLS.length;
+    // Count grounding_strictness as enabled only when strict
+    const groundingStrictness = securityConfig.grounding_strictness || 'strict';
+    if (groundingStrictness === 'strict') {
+        enabledCount++;
+    } else {
+        disabledControls.push(CONTROL_NAMES['grounding_strictness']);
+    }
+
+    const totalCount = BOOLEAN_CONTROLS.length + 1; // +1 for grounding_strictness
     const disabledCount = totalCount - enabledCount;
 
     // Update count text
