@@ -29,7 +29,6 @@ from mcp_server.database import (
     get_patient_by_id,
     get_patient_conditions,
     get_patient_prescriptions,
-    get_patient_appointments,
     get_patient_insurance,
     get_patient_lab_results,
 )
@@ -162,6 +161,12 @@ def check_patient_authorization(
     )
     return None
 
+
+# NOTE: get_appointments has been intentionally removed from this server.
+# Appointment scheduling is exclusively handled by the AppointmentsAgent via
+# the appointments MCP server (port 8002). This enforces tool scope separation
+# — the health agent cannot access scheduling data. This separation is
+# demonstrated as a security control in the Settings page.
 
 # ============================================================================
 # MCP Tools - Patient Health Information
@@ -357,34 +362,6 @@ async def get_prescriptions(patient_id: int, active_only: bool = True, auth_cont
         "prescriptions": prescriptions,
         "count": len(prescriptions),
         "active_only": active_only
-    }
-
-
-@mcp.tool()
-async def get_appointments(patient_id: int, upcoming_only: bool = True, auth_context: dict | None = None) -> dict:
-    """
-    Get appointments for a patient.
-
-    Args:
-        patient_id: The unique identifier of the patient
-        upcoming_only: If True, only return future scheduled appointments (default: True)
-
-    Returns:
-        List of appointments with provider, date, location, and reason
-    """
-    logger.info(f"Tool called: get_appointments(patient_id={patient_id}, upcoming_only={upcoming_only})")
-
-    # Check authorization
-    authz_error = check_patient_authorization("get_appointments", patient_id, auth_context)
-    if authz_error:
-        return authz_error
-
-    appointments = await get_patient_appointments(patient_id, upcoming_only)
-    return {
-        "patient_id": patient_id,
-        "appointments": appointments,
-        "count": len(appointments),
-        "upcoming_only": upcoming_only
     }
 
 
