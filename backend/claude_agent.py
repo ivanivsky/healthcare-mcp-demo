@@ -882,4 +882,5 @@ class HealthAdvisorAgent:
                 "input_tokens": self._total_input_tokens,
                 "output_tokens": self._total_output_tokens,
             },
+            "agent_name": "health_advisor",
         }
