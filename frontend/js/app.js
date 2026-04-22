@@ -659,7 +659,7 @@ async function sendMessage(message) {
         const data = await response.json();
 
         // Add assistant response to UI
-        addMessage(data.response, 'assistant', data.tool_calls);
+        addMessage(data.response, 'assistant', data.tool_calls, data.agent_name);
 
         // Update conversation history
         conversationHistory.push({ role: 'user', content: message });
@@ -677,7 +677,7 @@ async function sendMessage(message) {
 // UI Helpers
 // ============================================================================
 
-function addMessage(content, role, toolCalls = []) {
+function addMessage(content, role, toolCalls = [], agentName = '') {
     const messageDiv = document.createElement('div');
     messageDiv.className = `message ${role}-message`;
 
@@ -692,6 +692,17 @@ function addMessage(content, role, toolCalls = []) {
         toolsDiv.className = 'tool-calls';
         toolsDiv.innerHTML = `<small>Tools used: ${toolCalls.map(t => t.tool).join(', ')}</small>`;
         messageDiv.appendChild(toolsDiv);
+    }
+
+    // Add agent badge for assistant messages
+    if (role === 'assistant' && agentName) {
+        const isAppointments = agentName === 'appointments_advisor';
+        const icon = isAppointments ? '📅' : '🏥';
+        const label = isAppointments ? 'Appointments' : 'Health Advisor';
+        const badgeDiv = document.createElement('div');
+        badgeDiv.className = 'agent-badge';
+        badgeDiv.innerHTML = `<span class="agent-icon">${icon}</span><span class="agent-name">${label}</span>`;
+        messageDiv.appendChild(badgeDiv);
     }
 
     chatMessages.appendChild(messageDiv);

@@ -41,6 +41,8 @@ from backend.mcp_client import (
     MCPConnectionError,
 )
 from backend.claude_agent import HealthAdvisorAgent, get_all_system_prompts
+from backend.appointments_agent import AppointmentsAgent, shutdown_appointments_agent
+from backend.router_agent import RouterAgent
 from backend.debug_logger import get_debug_logger
 from backend.auth_context import AuthContext
 from backend.firebase_auth import (
@@ -87,6 +89,8 @@ if config.get("logging", {}).get("log_to_file", False):
 # Global state
 mcp_client = None
 agent = None
+appointments_agent = None
+router = None
 mcp_reconnect_lock = asyncio.Lock()
 
 
@@ -165,7 +169,7 @@ def invalidate_mcp_connection():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan - startup and shutdown."""
-    global mcp_client, agent
+    global mcp_client, agent, appointments_agent, router
 
     logger.info("Starting My Health Access backend...")
     logger.info(f"DEBUG_MODE={DEBUG_MODE} LOG_LEVEL={log_level}")
@@ -239,22 +243,44 @@ async def lifespan(app: FastAPI):
     # Initialize debug logger
     debug_logger = get_debug_logger()
 
-    # Connect to MCP server
+    # Connect to health MCP server (fatal if unavailable)
     try:
         mcp_client = await get_mcp_client()
         agent = HealthAdvisorAgent(mcp_client, debug_logger)
-        logger.info("Connected to MCP server")
+        logger.info("Connected to health MCP server")
         # Start keepalive to maintain SSE connection
         start_keepalive(interval_seconds=25)
     except Exception as e:
-        logger.warning(f"Could not connect to MCP server: {e}")
+        logger.warning(f"Could not connect to health MCP server: {e}")
         logger.warning("Chat functionality will be unavailable until MCP server is running")
+
+    # Connect to appointments MCP server (non-fatal — graceful degradation)
+    try:
+        appointments_agent = AppointmentsAgent(debug_logger)
+        await appointments_agent.initialize()
+        logger.info("Connected to appointments MCP server")
+    except Exception as e:
+        appointments_agent = None
+        logger.warning(f"APPOINTMENTS_AGENT_UNAVAILABLE: {e}")
+        logger.warning("Appointment queries will return an unavailability message")
+
+    # Initialize router (no network connection needed)
+    router = RouterAgent()
+
+    health_ready = agent is not None
+    appt_ready = appointments_agent is not None
+    logger.info(
+        f"MULTI_AGENT_READY health={health_ready} "
+        f"appointments={appt_ready} router=True"
+    )
 
     yield
 
     # Shutdown
     logger.info("Shutting down My Health Access backend...")
     await shutdown_mcp_client()
+    if appointments_agent is not None:
+        await appointments_agent.cleanup()
     await db.close_pool()
     logger.info("PostgreSQL connection pool closed.")
 
@@ -303,6 +329,8 @@ class ChatResponse(BaseModel):
     response: str
     tool_calls: list[dict]
     usage: dict
+    agent_name: str = ""
+    routing: dict = {}
 
 
 class PatientInfo(BaseModel):
@@ -659,11 +687,14 @@ async def chat(
     auth: AuthContext = Depends(get_auth_context),
 ):
     """
-    Process a chat message through the Claude agent.
+    Process a chat message through the multi-agent router.
 
+    Routes to HealthAdvisorAgent or AppointmentsAgent based on intent.
     Requires Firebase authentication and authorization for the requested patient.
     Authorization is derived from JWT custom claims — no database lookup.
     """
+    global router, appointments_agent
+
     logger.info(
         f"CHAT_REQUEST received sub={auth.sub} role={auth.role} "
         f"patient_id={chat_request.patient_id} message_len={len(chat_request.message)}"
@@ -672,7 +703,63 @@ async def chat(
     # Check patient access using claims-based authorization
     require_patient_access(auth, chat_request.patient_id)
 
-    # Ensure MCP connection (auto-reconnect if needed)
+    debug_logger = get_debug_logger()
+
+    # ── Step 1: Route the message ───────────────────────────────────────────
+    routing_decision = {"agent": "health", "confidence": 1.0, "reason": "default"}
+    if router is not None:
+        routing_decision = await router.route(
+            message=chat_request.message,
+            conversation_history=chat_request.conversation_history,
+        )
+    else:
+        logger.warning("ROUTER_UNAVAILABLE falling back to health agent")
+
+    target_agent = routing_decision["agent"]
+
+    debug_logger.log_agent_reasoning({
+        "action": "router_decision",
+        "target_agent": target_agent,
+        "confidence": routing_decision["confidence"],
+        "reason": routing_decision["reason"],
+        "patient_id": chat_request.patient_id,
+        "sub": auth.sub,
+    })
+
+    # ── Step 2: Appointments branch ─────────────────────────────────────────
+    if target_agent == "appointments":
+        if appointments_agent is None:
+            logger.warning(
+                f"APPOINTMENTS_AGENT_UNAVAILABLE routing to unavailability message "
+                f"sub={auth.sub}"
+            )
+            return ChatResponse(
+                response=(
+                    "Appointment scheduling is currently unavailable. "
+                    "Please try again later."
+                ),
+                tool_calls=[],
+                usage={},
+                agent_name="appointments_advisor",
+                routing=routing_decision,
+            )
+
+        try:
+            result = await appointments_agent.chat(
+                message=chat_request.message,
+                patient_id=chat_request.patient_id,
+                patient_name=chat_request.patient_name,
+                conversation_history=chat_request.conversation_history or [],
+                auth=auth,
+            )
+            result.setdefault("routing", routing_decision)
+            return ChatResponse(**result)
+        except Exception as e:
+            logger.error(f"APPOINTMENTS_CHAT_ERROR sub={auth.sub} error={e}")
+            debug_logger.log_error({"error": str(e), "type": "appointments_chat_error", "sub": auth.sub})
+            raise HTTPException(status_code=500, detail=str(e))
+
+    # ── Step 3: Health branch (default) ────────────────────────────────────
     logger.info(f"CHAT_ENSURE_CONNECTED start sub={auth.sub}")
     try:
         client, chat_agent = await ensure_mcp_connected()
@@ -684,7 +771,6 @@ async def chat(
 
     logger.info(f"CHAT_MCP_READY ready={mcp_ready} sub={auth.sub} patient_id={chat_request.patient_id}")
 
-    debug_logger = get_debug_logger()
     debug_logger.log_agent_reasoning({
         "action": "chat_request",
         "patient_id": chat_request.patient_id,
@@ -695,8 +781,6 @@ async def chat(
     })
 
     try:
-        # The AuthContext is already built from verified claims
-        # Pass it directly to the agent — no inline construction
         result = await chat_agent.chat(
             message=chat_request.message,
             patient_id=chat_request.patient_id,
@@ -704,6 +788,7 @@ async def chat(
             conversation_history=chat_request.conversation_history or [],
             auth=auth,
         )
+        result.setdefault("routing", routing_decision)
         return ChatResponse(**result)
     except MCPConnectionError as e:
         logger.error(f"CHAT_MCP_ERROR sub={auth.sub} error={e}")
