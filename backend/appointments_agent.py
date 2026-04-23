@@ -200,6 +200,14 @@ class AppointmentsAgent:
         # Own MCP client for appointments server
         self._mcp_client: Optional[AppointmentsMCPClient] = None
 
+        # Health MCP client — only connected when tool_scope_enforcement is OFF.
+        # None means scope enforcement is active (secure state).
+        self._health_mcp_client: Optional[MCPClient] = None
+
+        # Tracks the scope enforcement state at the last agent rebuild.
+        # None means the agent hasn't been built yet.
+        self._scope_enforcement_state: Optional[bool] = None
+
         # Model from config
         ai_config = self.config.get("ai", {})
         self._model = ai_config.get("model", MODEL)
@@ -237,12 +245,15 @@ class AppointmentsAgent:
             f"APPOINTMENTS_MCP_CONNECTED tools={[t['name'] for t in self._mcp_client.tools]}"
         )
 
-        # Build ADK agent
+        # Record the scope enforcement state at init time and build agent
+        self._scope_enforcement_state = is_security_control_enabled("tool_scope_enforcement")
         self._initialize_agent()
 
         logger.info(
             f"APPOINTMENTS_AGENT_INITIALIZED name=appointments_advisor "
-            f"model={self._model} tools_count={len(self._mcp_client.tools)}"
+            f"model={self._model} "
+            f"tools_count={len(self._get_tool_client_pairs())} "
+            f"scope_enforcement={self._scope_enforcement_state}"
         )
 
     @property
@@ -255,21 +266,99 @@ class AppointmentsAgent:
         )
 
     async def cleanup(self):
-        """Disconnect from the Appointments MCP server and release resources."""
+        """Disconnect from all MCP servers and release resources."""
         if self._mcp_client:
             await self._mcp_client.disconnect()
             self._mcp_client = None
+        if self._health_mcp_client:
+            await self._health_mcp_client.disconnect()
+            self._health_mcp_client = None
         self._agent = None
         self._runner = None
+        self._scope_enforcement_state = None
         logger.info("APPOINTMENTS_AGENT_CLEANUP complete")
 
     # -------------------------------------------------------------------------
     # Internal — ADK setup
     # -------------------------------------------------------------------------
 
+    def _get_tool_client_pairs(self) -> list[tuple]:
+        """
+        Return (mcp_tool, mcp_client) pairs for the current scope state.
+
+        When tool_scope_enforcement is ON (secure):
+            Returns only the 5 appointments tools.
+
+        When tool_scope_enforcement is OFF (insecure / demo vulnerability):
+            Returns appointments tools + health tools (excluding list_patients).
+            The health MCP client must already be connected before calling this.
+        """
+        pairs = [(t, self._mcp_client) for t in self._mcp_client.tools]
+
+        if (
+            not is_security_control_enabled("tool_scope_enforcement")
+            and self._health_mcp_client is not None
+        ):
+            # Exclude list_patients — too confusing for the demo
+            health_tools = [
+                t for t in self._health_mcp_client.tools
+                if t["name"] != "list_patients"
+            ]
+            pairs.extend([(t, self._health_mcp_client) for t in health_tools])
+
+        return pairs
+
+    async def _ensure_scope_correct(self):
+        """
+        Lazily connect the health MCP server and rebuild the agent's tool list
+        if the tool_scope_enforcement setting has changed since the last build.
+
+        Called at the start of every chat() invocation so toggles take effect
+        on the very next request without requiring a backend restart.
+        """
+        scope_enabled = is_security_control_enabled("tool_scope_enforcement")
+
+        if scope_enabled == self._scope_enforcement_state:
+            return  # No change — nothing to rebuild
+
+        if not scope_enabled:
+            # Scope enforcement was just disabled. Connect health MCP if needed.
+            if self._health_mcp_client is None:
+                logger.warning(
+                    "TOOL_SCOPE_VIOLATION appointments agent connecting to health "
+                    "MCP server — scope enforcement is DISABLED"
+                )
+                self._health_mcp_client = MCPClient()
+                await self._health_mcp_client.connect()
+
+            health_tool_names = [
+                t["name"] for t in self._health_mcp_client.tools
+                if t["name"] != "list_patients"
+            ]
+            logger.warning(
+                f"TOOL_SCOPE_VIOLATION appointments agent has access to health tools "
+                f"— scope enforcement is DISABLED. "
+                f"Health tools added: {health_tool_names}"
+            )
+        else:
+            logger.info(
+                "TOOL_SCOPE_RESTORED scope enforcement re-enabled — "
+                "health tools removed from appointments agent"
+            )
+
+        # Rebuild the LlmAgent with the updated tool set
+        self._initialize_agent()
+        self._scope_enforcement_state = scope_enabled
+
+        total = len(self._get_tool_client_pairs())
+        logger.info(
+            f"APPOINTMENTS_AGENT_REBUILT scope_enforcement={scope_enabled} "
+            f"total_tools={total}"
+        )
+
     def _initialize_agent(self):
-        """Build the LlmAgent and Runner from the connected MCP client."""
-        tools = self._create_tool_wrappers()
+        """Build (or rebuild) the LlmAgent and Runner from the current tool set."""
+        tools = self._create_tool_wrappers(self._get_tool_client_pairs())
 
         # Callback chain
         if self._model_armor_guard is not None:
@@ -305,15 +394,22 @@ class AppointmentsAgent:
             session_service=self._session_service,
         )
 
-    def _create_tool_wrappers(self) -> list:
-        """Wrap each MCP tool as an ADK function tool."""
-        return [self._make_tool_function(t) for t in self._mcp_client.tools]
+    def _create_tool_wrappers(self, tool_client_pairs: list[tuple]) -> list:
+        """Wrap each (mcp_tool, mcp_client) pair as an ADK function tool."""
+        return [self._make_tool_function(tool, client) for tool, client in tool_client_pairs]
 
-    def _make_tool_function(self, mcp_tool: dict):
-        """Create an async wrapper function for a single MCP tool."""
+    def _make_tool_function(self, mcp_tool: dict, mcp_client: MCPClient):
+        """
+        Create an async wrapper function for a single MCP tool.
+
+        The mcp_client parameter explicitly binds which server handles this
+        tool's calls — appointments tools route to port 8002, health tools
+        (when scope enforcement is off) route to port 8001.
+        """
         tool_name = mcp_tool["name"]
         tool_description = mcp_tool.get("description", "")
         agent_self = self
+        bound_client = mcp_client  # Captured in closure; does not change on rebuild
 
         async def tool_function(**kwargs) -> str:
             agent_self.debug_logger.log_mcp_request({
@@ -326,7 +422,7 @@ class AppointmentsAgent:
             logger.info(f"APPOINTMENTS_TOOL_CALL start tool={tool_name}")
 
             try:
-                result = await agent_self._mcp_client.call_tool(
+                result = await bound_client.call_tool(
                     tool_name, kwargs, auth=agent_self._current_auth
                 )
 
@@ -496,6 +592,10 @@ class AppointmentsAgent:
                 "AppointmentsAgent is not connected. Call initialize() first."
             )
 
+        # Check if scope enforcement was toggled since the last build and
+        # lazily connect/disconnect the health MCP client as needed.
+        await self._ensure_scope_correct()
+
         # Per-request context
         self._current_auth = auth
         self._current_patient_id = patient_id
@@ -524,7 +624,7 @@ class AppointmentsAgent:
             "temperature": grounding["temperature"],
             "system": system_prompt[:200] + "...",
             "message": message[:100] + "..." if len(message) > 100 else message,
-            "tools": [t["name"] for t in self._mcp_client.tools],
+            "tools": [t["name"] for t, _ in self._get_tool_client_pairs()],
             "request_id": auth.request_id if auth else None,
             "sub": auth.sub if auth else None,
             "adk_enabled": True,

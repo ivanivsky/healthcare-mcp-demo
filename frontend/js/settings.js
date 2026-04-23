@@ -18,7 +18,8 @@ const BOOLEAN_CONTROLS = [
     'mcp_transport_auth_required',
     'mcp_auth_context_signing_required',
     'deterministic_error_responses',
-    'prompt_injection_protection'
+    'prompt_injection_protection',
+    'tool_scope_enforcement'
 ];
 
 // Human-readable control names for display
@@ -30,6 +31,7 @@ const CONTROL_NAMES = {
     'deterministic_error_responses': 'Deterministic Errors',
     'prompt_injection_protection': 'Prompt Injection',
     'grounding_strictness': 'Grounding Strictness',
+    'tool_scope_enforcement': 'Tool Scope Enforcement',
 };
 
 // ============================================================================
@@ -121,7 +123,7 @@ async function handleAuthStateChange(user) {
         isReadOnly = false;
         await loadSecurityConfig();
         showSettingsContent();
-        renderControls();
+        setTimeout(() => renderControls(), 50);
 
     } catch (error) {
         console.error('[Settings] Error checking user role:', error);
@@ -312,10 +314,12 @@ async function updateSecurityControl(controlName, value) {
 // ============================================================================
 
 function renderControls() {
+    console.log('[renderControls] called, tool_scope_enforcement =', securityConfig['tool_scope_enforcement'], '| full config:', securityConfig);
     // Set boolean toggle states
     for (const control of BOOLEAN_CONTROLS) {
         const toggle = document.getElementById(`toggle-${control}`);
         if (toggle && securityConfig[control] !== undefined) {
+            console.log(`[renderControls] setting toggle-${control}.checked =`, securityConfig[control]);
             toggle.checked = securityConfig[control];
             updateCardStyling(control, securityConfig[control]);
         }

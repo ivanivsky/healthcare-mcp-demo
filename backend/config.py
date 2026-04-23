@@ -119,6 +119,7 @@ def update_security_config(updates: dict) -> dict:
         "system_prompt_level",
         "deterministic_error_responses",
         "grounding_strictness",
+        "tool_scope_enforcement",
     }
 
     for key, value in updates.items():

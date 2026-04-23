@@ -365,6 +365,7 @@ class SecurityConfigUpdate(BaseModel):
     system_prompt_level: str | None = None
     deterministic_error_responses: bool | None = None
     grounding_strictness: str | None = None
+    tool_scope_enforcement: bool | None = None
 
 
 class SecurityConfigResponse(BaseModel):
@@ -859,6 +860,8 @@ async def get_debug_config():
         "mcp_transport_auth_required",
         "mcp_auth_context_signing_required",
         "prompt_injection_protection",
+        "deterministic_error_responses",
+        "tool_scope_enforcement",
     ]
     enabled_count = sum(1 for k in control_keys if security_config.get(k, False))
     total_count = len(control_keys)
@@ -1353,6 +1356,8 @@ def _build_security_response(security_config: dict) -> SecurityConfigResponse:
         "mcp_transport_auth_required",
         "mcp_auth_context_signing_required",
         "prompt_injection_protection",
+        "deterministic_error_responses",
+        "tool_scope_enforcement",
     ]
     enabled_count = sum(1 for k in control_keys if security_config.get(k, False))
     total_count = len(control_keys)
@@ -1414,6 +1419,7 @@ async def update_security_config_endpoint(
         "system_prompt_level",
         "deterministic_error_responses",
         "grounding_strictness",
+        "tool_scope_enforcement",
     ]:
         value = getattr(body, field)
         if value is not None:

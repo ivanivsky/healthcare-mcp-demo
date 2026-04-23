@@ -256,6 +256,23 @@
                     </div>
                     <div class="control-status" id="status-grounding_strictness"></div>
                 </div>
+
+                <div class="control-card" id="card-tool_scope_enforcement">
+                    <div class="control-header">
+                        <div class="control-title">Tool Scope Enforcement</div>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="toggle-tool_scope_enforcement" data-control="tool_scope_enforcement">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    <div class="control-description">
+                        Controls whether each agent is restricted to tools within its designated scope. When ON: the appointments agent can only call scheduling tools (5 tools). When OFF: the appointments agent also connects to the health MCP server and gains access to health data tools — demonstrating what happens when an AI agent is over-privileged.
+                    </div>
+                    <div class="control-attack-vector">
+                        <span class="attack-label">Attack vector:</span> Over-privileged agent accesses PHI outside its intended scope
+                    </div>
+                    <div class="control-status" id="status-tool_scope_enforcement"></div>
+                </div>
             </section>
 
             <!-- Section 3: Data Controls -->
@@ -275,15 +292,6 @@
                     </div>
                 </div>
 
-                <div class="control-card control-card-coming-soon">
-                    <div class="control-header">
-                        <div class="control-title">Tool Scope Enforcement</div>
-                        <span class="coming-soon-badge">Coming Soon</span>
-                    </div>
-                    <div class="control-description">
-                        Restricts which MCP tools each role can call. e.g. caregiver: appointments only, not lab results.
-                    </div>
-                </div>
             </section>
 
             <!-- Section 4: Observability -->

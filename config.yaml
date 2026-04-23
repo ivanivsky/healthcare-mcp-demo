@@ -124,6 +124,17 @@ security:
   #             details about authorization failures and system internals.
   deterministic_error_responses: true
 
+  # Tool scope enforcement.
+  # When true:  each agent can only access tools within its designated scope.
+  #             AppointmentsAgent → 5 scheduling tools only.
+  #             HealthAdvisorAgent → 6 health data tools only.
+  # When false: AppointmentsAgent also connects to the health MCP server and
+  #             gains access to health data tools (get_patient_demographics,
+  #             get_medical_records, get_prescriptions, get_insurance_info,
+  #             get_lab_results), demonstrating an over-privileged agent that
+  #             can access PHI outside its intended scope.
+  tool_scope_enforcement: true
+
   # Rate limiting configuration.
   rate_limiting:
     enabled: true
